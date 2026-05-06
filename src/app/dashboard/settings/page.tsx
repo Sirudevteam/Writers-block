@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import { motion } from "framer-motion"
-import { ArrowLeft, User, Mail, Bell, Shield, Palette, Loader2 } from "lucide-react"
+import { ArrowLeft, User, Mail, Bell, Shield, Palette, Loader2, Download, LogOut, Trash2 } from "lucide-react"
 import Link from "next/link"
 import { Button } from "@/ui/components/button"
 import { Input } from "@/ui/components/input"
@@ -30,6 +30,9 @@ export default function SettingsPage() {
   const [isSaving, setIsSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saveOk, setSaveOk] = useState(false)
+  const [accountBusy, setAccountBusy] = useState<"export" | "sessions" | "delete" | null>(null)
+  const [accountError, setAccountError] = useState<string | null>(null)
+  const [accountOk, setAccountOk] = useState<string | null>(null)
 
   const [fullName, setFullName] = useState("")
   const [bio, setBio] = useState("")
@@ -202,10 +205,90 @@ export default function SettingsPage() {
     }
   }
 
+  const handleAccountExport = async () => {
+    setAccountBusy("export")
+    setAccountError(null)
+    setAccountOk(null)
+    try {
+      const res = await fetch("/api/account/export", {
+        method: "POST",
+        credentials: "same-origin",
+      })
+      if (!res.ok) {
+        setAccountError(await parseError(res))
+        return
+      }
+      const data = await res.json()
+      const payload = data?.export?.payload ?? data
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = `writers-block-account-export-${new Date().toISOString().slice(0, 10)}.json`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+      setAccountOk("Account export prepared.")
+    } catch (e) {
+      setAccountError(e instanceof Error ? e.message : "Failed to export account data")
+    } finally {
+      setAccountBusy(null)
+    }
+  }
+
+  const handleRevokeSessions = async () => {
+    if (!confirm("Sign out other sessions and require sign-in again?")) return
+    setAccountBusy("sessions")
+    setAccountError(null)
+    setAccountOk(null)
+    try {
+      const res = await fetch("/api/account/sessions/revoke-all", {
+        method: "POST",
+        credentials: "same-origin",
+      })
+      if (!res.ok) {
+        setAccountError(await parseError(res))
+        return
+      }
+      window.location.href = "/signin"
+    } catch (e) {
+      setAccountError(e instanceof Error ? e.message : "Failed to revoke sessions")
+    } finally {
+      setAccountBusy(null)
+    }
+  }
+
+  const handleAccountDeletion = async () => {
+    const reason = window.prompt("Optional reason for deleting this account") ?? ""
+    if (!confirm("Request account deletion? This can block if you are the only owner of an organization.")) return
+    setAccountBusy("delete")
+    setAccountError(null)
+    setAccountOk(null)
+    try {
+      const res = await fetch("/api/account", {
+        method: "DELETE",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason }),
+      })
+      if (!res.ok) {
+        setAccountError(await parseError(res))
+        return
+      }
+      setAccountOk("Account deletion request submitted.")
+    } catch (e) {
+      setAccountError(e instanceof Error ? e.message : "Failed to request account deletion")
+    } finally {
+      setAccountBusy(null)
+    }
+  }
+
   const tabs = [
     { id: "profile", label: "Profile", icon: User },
     { id: "notifications", label: "Notifications", icon: Bell },
     { id: "security", label: "Security", icon: Shield },
+    { id: "account", label: "Account", icon: Trash2 },
     { id: "appearance", label: "Appearance", icon: Palette },
   ] as const
 
@@ -576,6 +659,104 @@ export default function SettingsPage() {
                           </div>
                         </div>
                       ) : null}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
+              {activeTab === "account" && (
+                <Card className="border-white/10 bg-[#0f0f0f]/80 backdrop-blur-sm">
+                  <CardHeader className="px-5 pt-6 sm:px-8 sm:pt-8">
+                    <CardTitle className="text-lg font-semibold text-white sm:text-xl">Account controls</CardTitle>
+                    <p className="text-sm text-muted-foreground">
+                      Export your account data, revoke active sessions, or submit an account deletion request.
+                    </p>
+                  </CardHeader>
+                  <CardContent className="space-y-5 px-5 pb-8 text-sm sm:px-8 sm:pb-10">
+                    {accountError ? (
+                      <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200" role="alert">
+                        {accountError}
+                      </div>
+                    ) : null}
+                    {accountOk ? (
+                      <div className="rounded-lg border border-green-500/40 bg-green-500/10 px-4 py-3 text-sm text-green-200">
+                        {accountOk}
+                      </div>
+                    ) : null}
+
+                    <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
+                      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="min-w-0">
+                          <div className="font-medium text-white">Export account data</div>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            Includes profile, organizations, projects, subscription, and invoice rows available to your account.
+                          </p>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="h-10 shrink-0 rounded-xl border-white/10 bg-white/5 text-white/80"
+                          onClick={() => void handleAccountExport()}
+                          disabled={accountBusy !== null}
+                        >
+                          {accountBusy === "export" ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          ) : (
+                            <Download className="mr-2 h-4 w-4" />
+                          )}
+                          Export
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
+                      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="min-w-0">
+                          <div className="font-medium text-white">Revoke all sessions</div>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            Signs out your active sessions through the backend session revocation control.
+                          </p>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="h-10 shrink-0 rounded-xl border-white/10 bg-white/5 text-white/80"
+                          onClick={() => void handleRevokeSessions()}
+                          disabled={accountBusy !== null}
+                        >
+                          {accountBusy === "sessions" ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          ) : (
+                            <LogOut className="mr-2 h-4 w-4" />
+                          )}
+                          Revoke
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-red-500/25 bg-red-500/[0.06] p-4">
+                      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="min-w-0">
+                          <div className="font-medium text-red-100">Request account deletion</div>
+                          <p className="mt-1 text-xs text-red-100/65">
+                            Organization ownership is checked before the request can proceed.
+                          </p>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="h-10 shrink-0 rounded-xl border-red-500/30 bg-red-500/10 text-red-100 hover:bg-red-500/15"
+                          onClick={() => void handleAccountDeletion()}
+                          disabled={accountBusy !== null}
+                        >
+                          {accountBusy === "delete" ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          ) : (
+                            <Trash2 className="mr-2 h-4 w-4" />
+                          )}
+                          Request deletion
+                        </Button>
+                      </div>
                     </div>
                   </CardContent>
                 </Card>

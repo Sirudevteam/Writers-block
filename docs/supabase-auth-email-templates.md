@@ -1,6 +1,6 @@
 # Auth OTP Email Ownership
 
-**Last updated:** May 4, 2026
+**Last updated:** May 6, 2026
 
 Writers Block no longer uses Supabase hosted auth email templates for the core signup/signin OTP flow.
 
@@ -51,8 +51,8 @@ Set these server environment variables:
 - `SUPABASE_SERVICE_ROLE_KEY`
 - `RESEND_API_KEY`
 - `RESEND_FROM_EMAIL`
-- `AUTH_OTP_SECRET` recommended; falls back to `SUPABASE_SERVICE_ROLE_KEY`
-- `MASTER_ADMIN_OTP_SECRET` optional; falls back to `AUTH_OTP_SECRET` or `SUPABASE_SERVICE_ROLE_KEY`
+- `AUTH_OTP_SECRET` required in production; local development can fall back to `SUPABASE_SERVICE_ROLE_KEY`
+- `MASTER_ADMIN_OTP_SECRET` required in production; local development can fall back to `AUTH_OTP_SECRET` or `SUPABASE_SERVICE_ROLE_KEY`
 
 In production, set explicit OTP secrets instead of relying on provider keys as encryption secrets.
 

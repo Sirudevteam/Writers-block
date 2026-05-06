@@ -12,6 +12,10 @@ function otpChallengesTable(admin: SupabaseClient<Database>) {
 }
 
 function getOtpSecret(): string {
+  if (process.env.NODE_ENV === "production" && !process.env.AUTH_OTP_SECRET) {
+    throw new Error("AUTH_OTP_SECRET is required for auth OTPs in production")
+  }
+
   const secret =
     process.env.AUTH_OTP_SECRET ||
     process.env.SUPABASE_SERVICE_ROLE_KEY ||

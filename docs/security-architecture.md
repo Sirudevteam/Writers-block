@@ -1,6 +1,6 @@
 # Security Architecture
 
-**Last updated:** May 5, 2026
+**Last updated:** May 6, 2026
 
 Writers Block implements a defense-in-depth security architecture with multiple layers of protection.
 
@@ -49,16 +49,16 @@ Writers Block implements a defense-in-depth security architecture with multiple 
 │  ├─ IAM: Role-based access control (owner/admin/member/billing) │
 │  ├─ IAM: Permission-based authorization (org:read, project:write│
 │  ├─ MFA enforcement (AAL2 for Master Admin, sensitive ops)      │
-│  ├─ HMAC verification (Razorpay signatures; internal reserved)  │
+│  ├─ HMAC/shared-secret checks (Razorpay, cron, app jobs)        │
 │  └─ Anti-CSRF validation (Origin + Sec-Fetch-Site)              │
 └──────────────────────────────┬──────────────────────────────────┘
                                │
 ┌──────────────────────────────▼──────────────────────────────────┐
 │  Layer 5: Rate Limiting                                         │
-│  ├─ IP-based: 100 req/min (general API), 10 req/hr (AI gen)    │
+│  ├─ IP-based: API, AI, payment, PDF, SCIM, support intake       │
 │  ├─ Auth-specific: 25 req/15min (anti-brute-force)              │
 │  ├─ Per-user plan-based: Free(5/day), Pro(50/day), Premium(200/day) │
-│  └─ Upstash Redis sliding window (production-only enforcement)  │
+│  └─ Upstash Redis sliding window; production fails closed       │
 └──────────────────────────────┬──────────────────────────────────┘
                                │
 ┌──────────────────────────────▼──────────────────────────────────┐
@@ -66,8 +66,8 @@ Writers Block implements a defense-in-depth security architecture with multiple 
 │  ├─ Input validation (Zod schemas on high-risk API routes)      │
 │  ├─ Supabase Row-Level Security (RLS) on all tables             │
 │  ├─ Service Role key server-side only (never exposed to client) │
-│  ├─ Sentry PII scrubbing (cookies, auth headers, IPs stripped)  │
-│  └─ Cron secret validation (Bearer token on /api/cron/*)        │
+│  ├─ Sentry PII scrubbing (headers, IPs, query/body secrets)     │
+│  └─ Cron and app-job shared secret validation                   │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -75,19 +75,25 @@ Writers Block implements a defense-in-depth security architecture with multiple 
 
 ## Middleware Scope
 
-`middleware.ts` is intentionally scoped to protected app routes, auth pages, Master Admin, and API routes. The public homepage `/` is statically prerendered and is not included in the middleware matcher.
+`middleware.ts` covers non-static pages and API routes. Static assets, Next internals, image files, maps, fonts, `robots.txt`, and `sitemap.xml` are excluded.
 
 Current matcher intent:
 
-- `/dashboard`, `/dashboard/:path*`
-- `/editor`, `/editor/:path*`
-- `/signin`, `/signup`
-- `/forgot-password`, `/reset-password`
-- `/verify-code` is the active OTP page for signup, signin, password reset, and Master Admin OTP flows
-- `/master-admin`, `/master-admin/:path*`
-- `/api/:path*`
+- All HTML pages that are not static assets.
+- `/api/:path*`.
+- Exclusions for `_next/static`, `_next/image`, common static file extensions, `robots.txt`, and `sitemap.xml`.
 
-Do not add `/` back to the matcher unless there is a concrete request-time security requirement. Public-page security headers are applied from `next.config.js`, and keeping `/` outside middleware protects homepage TTFB and LCP.
+The public homepage `/` is now handled by middleware so the response can receive a per-request CSP nonce for JSON-LD scripts. The page must still avoid server-side Supabase Auth checks; the navbar resolves guest vs signed-in links client-side.
+
+Middleware response responsibilities:
+
+- Add `X-Request-ID`.
+- Build a nonce-backed `Content-Security-Policy`.
+- Run the app WAF before session refresh.
+- Run CSRF checks before route handlers.
+- Refresh Supabase session cookies.
+- Return `401` for protected APIs before route code when no user exists.
+- Enforce dashboard/editor, Master Admin, account-suspension, and revoked-session gates.
 
 ### API Route Policy
 
@@ -101,6 +107,18 @@ All API routes pass through a centralized middleware policy before route handler
 Protected APIs require a Supabase Auth session in middleware and return `401` before route code runs when no session is present. Route handlers still enforce the domain-specific checks: org IAM, Master Admin operator access, Razorpay HMAC validation, service-role-only RPCs, and endpoint-specific rate limits.
 
 Middleware also adds `X-Request-ID` to responses it handles so blocked and passed-through protected requests can be correlated with platform logs.
+
+### Content Security Policy
+
+CSP is generated in middleware with a fresh nonce per request. Inline application scripts must carry that nonce. The homepage JSON-LD scripts read the nonce from the request headers and attach it to the `<script type="application/ld+json">` tags.
+
+Current CSP posture:
+
+- `script-src` allows self, the request nonce, Razorpay checkout/CDN, and Vercel analytics scripts.
+- `script-src-attr 'none'` blocks inline script attributes.
+- `style-src 'self'`, `style-src-elem 'self' 'nonce-...'`, and `style-src-attr 'unsafe-inline'` support framework/runtime styles while avoiding blanket inline script allowance.
+- `object-src 'none'`, `base-uri 'self'`, `form-action 'self'`, and `frame-ancestors 'self'` are present.
+- Razorpay checkout frames are allowed through `frame-src`.
 
 ### Environment Variables
 
@@ -124,9 +142,9 @@ Middleware also adds `X-Request-ID` to responses it handles so blocked and passe
 3. Tune patterns if needed
 4. Set `WAF_DRY_RUN=false` to enable blocking
 
-## HMAC Verification
+## HMAC and Shared-Secret Verification
 
-The app currently validates HMAC signatures for payment flows:
+The app validates HMAC signatures for payment flows and shared secrets for app-owned machine routes:
 
 - `/api/razorpay/verify` checks the client-returned `razorpay_order_id|razorpay_payment_id` signature for UX validation.
 - `/api/razorpay/webhook` checks `x-razorpay-signature` against `RAZORPAY_WEBHOOK_SECRET` before applying subscription state, AI credit top-ups, or clean PDF purchases.
@@ -141,7 +159,7 @@ Payment hardening rules:
 - Replay, duplicate, mismatch, invalid signature, pending webhook, and already-consumed paths are logged to Master Admin security/business events.
 - Razorpay webhooks are not throttled, but all non-webhook payment routes have focused rate limits.
 
-`INTERNAL_API_SECRET` remains a reserved environment variable in `.env.example`; no route currently enforces app-owned internal request signing with it. Cron endpoints are protected by `CRON_SECRET` bearer checks instead. Add a concrete validator before relying on `INTERNAL_API_SECRET` for production authorization.
+`INTERNAL_API_SECRET` is accepted by app-owned background job routes as a shared fallback (`Authorization: Bearer ...` or `x-internal-api-secret`). Cron endpoints require `CRON_SECRET` (`Authorization: Bearer ...` or `x-cron-secret`). Razorpay webhooks require Razorpay HMAC signatures and do not accept app-owned shared secrets.
 
 ## Quota and Spend Abuse Controls
 
@@ -165,6 +183,12 @@ AI spend is controlled before provider calls.
 - Provider, model, token usage, latency, status, and cost are written to `usage_logs`.
 
 See [ai-cost-and-project-quotas.md](./ai-cost-and-project-quotas.md) for the product rules and operational test cases.
+
+Rate-limit infrastructure behavior:
+
+- Production returns `503` rather than allowing protected API/payment/PDF/SCIM/support traffic when Upstash Redis is missing or unreachable.
+- Local development can use the in-memory dev limiter where no real protection is expected.
+- AI generation routes separately fail closed in production when AI rate-limit infrastructure is not configured unless the explicit emergency flag is set.
 
 PDF export abuse controls:
 
@@ -206,6 +230,7 @@ Custom SCIM is app-owned:
 
 - `/api/scim/v2/:orgId/Users` is classified as machine-authenticated and bypasses browser CSRF checks.
 - SCIM bearer tokens are stored as SHA-256 hashes only.
+- SCIM requests are rate-limited per organization and client IP before token validation.
 - Deprovisioning removes org membership and revokes app sessions.
 
 Provider client secrets must stay in Supabase/provider configuration, not in `NEXT_PUBLIC_*` environment variables.
@@ -265,5 +290,5 @@ All Cloudflare infrastructure is managed via Terraform:
 1. Rotate the compromised key immediately via Terraform Cloud / Cloudflare dashboard
 2. If `SUPABASE_SERVICE_ROLE_KEY`: Regenerate in Supabase dashboard, update Terraform
 3. If `RAZORPAY_WEBHOOK_SECRET`: rotate in Razorpay Dashboard and deployment env together.
-4. If `INTERNAL_API_SECRET` is introduced in future validators, rotate it and redeploy every caller and callee.
+4. If `INTERNAL_API_SECRET`: rotate it and redeploy app-owned background job callers and callees.
 5. Review IAM and Master Admin audit logs for unauthorized access during the exposure window.

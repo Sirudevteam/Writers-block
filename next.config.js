@@ -1,8 +1,6 @@
 const { withSentryConfig } = require('@sentry/nextjs')
 
 /** @type {import('next').NextConfig} */
-const isDev = process.env.NODE_ENV === 'development'
-
 const nextConfig = {
   reactStrictMode: true,
 
@@ -82,32 +80,6 @@ const nextConfig = {
           {
             key: 'Referrer-Policy',
             value: 'origin-when-cross-origin',
-          },
-          {
-            key: 'Content-Security-Policy',
-            value: [
-              "default-src 'self'",
-              `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""} https://checkout.razorpay.com https://cdn.razorpay.com https://va.vercel-scripts.com`,
-              "frame-src https://api.razorpay.com https://checkout.razorpay.com",
-              [
-                "connect-src 'self'",
-                "https://*.supabase.co",
-                "wss://*.supabase.co",
-                "https://*.upstash.io",
-                "https://api.resend.com",
-                "https://api.razorpay.com",
-                "https://lumberjack.razorpay.com",
-                "https://vitals.vercel-insights.com",
-                "https://*.vercel-insights.com",
-                "https://cdn.jsdelivr.net",
-                "https://unpkg.com",
-              ].join(" "),
-              "img-src 'self' data: blob: https://img.youtube.com",
-              "style-src 'self' 'unsafe-inline'",
-              "font-src 'self' data:",
-              "media-src 'self'",
-              "worker-src 'self' blob:",
-            ].join('; '),
           },
         ],
       },

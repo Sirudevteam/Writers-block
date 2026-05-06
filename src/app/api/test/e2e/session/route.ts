@@ -5,6 +5,7 @@ import { z } from "zod"
 import type { Database } from "@/infrastructure/db/types/database"
 import { createAdminClient } from "@/infrastructure/db/supabase/admin"
 import { E2E_TEST_HEADERS, requireE2eTestAccess } from "../_shared"
+import { PLAN_LIMITS } from "@/shared/types/project"
 
 export const dynamic = "force-dynamic"
 
@@ -14,12 +15,6 @@ const bodySchema = z.object({
   fullName: z.string().trim().min(1).max(120).optional(),
   plan: z.enum(["free", "pro", "premium"]).optional().default("free"),
 })
-
-const PROJECT_LIMITS = {
-  free: 3,
-  pro: 10,
-  premium: 50,
-} as const
 
 export async function POST(request: NextRequest) {
   const denied = requireE2eTestAccess(request)
@@ -63,7 +58,7 @@ export async function POST(request: NextRequest) {
     {
       user_id: userId,
       plan,
-      projects_limit: PROJECT_LIMITS[plan],
+      projects_limit: PLAN_LIMITS[plan],
       status: "active",
       current_period_start: new Date().toISOString(),
     },

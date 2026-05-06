@@ -11,6 +11,10 @@ function masterAdminOtpChallengesTable(admin: SupabaseClient<Database>) {
 }
 
 function getMasterAdminOtpSecret(): string {
+  if (process.env.NODE_ENV === "production" && !process.env.MASTER_ADMIN_OTP_SECRET) {
+    throw new Error("MASTER_ADMIN_OTP_SECRET is required for Master Admin OTPs in production")
+  }
+
   const secret =
     process.env.MASTER_ADMIN_OTP_SECRET ||
     process.env.AUTH_OTP_SECRET ||

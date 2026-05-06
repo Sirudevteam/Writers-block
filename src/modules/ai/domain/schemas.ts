@@ -56,3 +56,59 @@ export const sendPdfSchema = z
     content: z.string().max(600_000).optional(),
   })
   .strict()
+
+export const shotSuggestionSchema = z
+  .object({
+    shotNumber: z.number().int().min(1).max(100),
+    shotType: z.string().trim().min(1).max(120),
+    cameraAngle: z.string().trim().min(1).max(120),
+    composition: z.string().trim().min(1).max(200),
+    cameraMovement: z.string().trim().min(1).max(160),
+    purpose: z.string().trim().min(1).max(240),
+    description: z.string().trim().min(1).max(1_000),
+  })
+  .strict()
+
+export const shotSuggestionsArraySchema = z.array(shotSuggestionSchema).min(1).max(8)
+
+export const shotSuggestionsResponseSchema = z
+  .object({
+    shots: shotSuggestionsArraySchema,
+  })
+  .strict()
+
+const movieReferenceCoreSchema = z
+  .object({
+    movie: z.string().trim().min(1).max(200),
+    scene: z.string().trim().min(1).max(200),
+    youtubeId: z.string().trim().regex(/^[a-zA-Z0-9_-]{6,20}$/),
+    description: z.string().trim().min(1).max(1_000),
+    matchReason: z.string().trim().min(1).max(1_000),
+    emotion: z.string().trim().min(1).max(80),
+    situation: z.string().trim().min(1).max(120),
+    location: z.string().trim().min(1).max(120),
+  })
+  .strict()
+
+export const movieReferenceAiSchema = movieReferenceCoreSchema
+  .extend({
+    thumbnail: z.string().url().max(2_000).optional(),
+  })
+  .strict()
+
+export const movieReferenceSchema = movieReferenceCoreSchema
+  .extend({
+    thumbnail: z.string().url().max(2_000),
+  })
+  .strict()
+
+export const movieReferencesAiArraySchema = z.array(movieReferenceAiSchema).min(1).max(5)
+
+export const movieReferencesResponseSchema = z
+  .object({
+    references: z.array(movieReferenceSchema).min(1).max(5),
+  })
+  .strict()
+
+export type ShotSuggestion = z.infer<typeof shotSuggestionSchema>
+export type MovieReference = z.infer<typeof movieReferenceSchema>

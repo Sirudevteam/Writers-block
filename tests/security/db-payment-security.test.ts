@@ -12,6 +12,13 @@ describe("billing database security", () => {
     expect(sql).toMatch(/projects_limit\s+INTEGER\s+DEFAULT 3/)
   })
 
+  it("keeps paid project limits aligned with database grants", () => {
+    expect(PLAN_LIMITS.pro).toBe(25)
+    expect(PLAN_LIMITS.premium).toBe(999_999)
+    expect(sql).toContain("WHEN sub_plan = 'pro' THEN 25 WHEN sub_plan = 'premium' THEN 999999")
+    expect(sql).toContain("CASE p_plan WHEN 'pro' THEN 25 WHEN 'premium' THEN 999999 ELSE 3 END")
+  })
+
   it("consumes clean PDF purchases only through a service-role RPC", () => {
     expect(sql).toContain("CREATE OR REPLACE FUNCTION public.consume_pdf_export_purchase")
     expect(sql).toContain("FOR UPDATE")

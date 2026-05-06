@@ -23,7 +23,7 @@ export const faqItems: HomeFAQItem[] = [
   },
   {
     question: "What do I get on the Free plan vs Pro?",
-    answer: `The Free plan is Learn & Explore: 100K AI credits/month, up to about 800 words per generation, 3 lifetime project creations, Fast drafting mode, and watermarked print/email PDF. Deleting a Free project does not restore a creation. Pro (from ₹${pro}/month) is Build & Create: 600K AI credits/month, Smart routing, faster generation, reusable active project slots, dialogue and continuation tools, style rewrite, clean PDF export, and paid 100K credit top-ups for ₹99.`,
+    answer: `The Free plan is Learn & Explore: 100K AI credits/month, up to about 800 words per generation, 3 lifetime project creations, Fast drafting mode, and watermarked print/email PDF. Deleting a Free project does not restore a creation. Pro (from ₹${pro}/month) is Build & Create: 600K AI credits/month, Smart routing, higher-quality outputs, reusable active project slots, dialogue and continuation tools, style rewrite, clean PDF export, and paid 100K credit top-ups for ₹99.`,
   },
   {
     question: "Can I export my screenplay to PDF?",
@@ -33,7 +33,7 @@ export const faqItems: HomeFAQItem[] = [
   {
     question: "What powers the writing behind the scenes?",
     answer:
-      "Screenplay, continuation, shot ideas, and similar flows run through an internal router. The app shows simple writing power levels instead of model names: Fast on Free, Smart on Pro, and Cinematic priority on Premium. AI credits are used based on content length and complexity.",
+      "Screenplay, continuation, shot ideas, and similar flows run through an internal router. The app shows simple writing power levels instead of model names: Fast on Free, Smart on Pro, and Cinematic on Premium. AI credits are used based on content length and complexity.",
   },
   {
     question: "Is Writers Block suitable for beginner screenwriters?",
@@ -42,7 +42,7 @@ export const faqItems: HomeFAQItem[] = [
   },
   {
     question: "Is there team or API access for studios?",
-    answer: `Full team workspaces and a public API are on our roadmap. Today, Premium (₹${prem}/month) is Produce & Scale: 2M AI credits/month, Cinematic priority routing, longer long-form outputs, unlimited projects under a high cap, and priority when the system is busy. Fair usage policy applies.`,
+    answer: `Full team workspaces and a public API are on our roadmap. Today, Premium (₹${prem}/month) is Produce & Scale: 2M AI credits/month, a Cinematic plan profile, longer long-form outputs, unlimited projects under a high cap, and 200 AI generations/day. Fair usage policy applies.`,
   },
   {
     question: "Is there a free trial for paid plans?",

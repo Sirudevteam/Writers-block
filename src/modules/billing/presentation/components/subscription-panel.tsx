@@ -5,7 +5,7 @@ import { motion } from "framer-motion"
 import { Crown, Zap, Sparkles, AlertCircle, ArrowRight, Coins } from "lucide-react"
 import { Button } from "@/ui/components/button"
 import type { Subscription } from "@/shared/types/project"
-import { PLAN_NAMES, isUnlimitedProjectLimit } from "@/shared/types/project"
+import { PLAN_DAILY_LIMITS, PLAN_NAMES, isUnlimitedProjectLimit } from "@/shared/types/project"
 import type { ProjectQuota } from "@/modules/projects/domain/types"
 import type { AiCreditHistoryItem, AiCreditSnapshot } from "@/modules/ai/domain/credits"
 
@@ -198,6 +198,11 @@ function SubscriptionPanelComponent({ subscription, projectQuota, onUpgrade, onB
               </>
             )}
           </p>
+
+          <div className="flex items-center justify-between rounded-xl border border-white/10 bg-black/15 px-4 py-3">
+            <span className="text-sm text-muted-foreground">Daily AI generations</span>
+            <span className="text-sm font-bold text-white">{PLAN_DAILY_LIMITS[plan]} / day</span>
+          </div>
 
           {aiCredits && (
             <div className="rounded-xl border border-white/10 bg-black/15 p-4">

@@ -7,6 +7,10 @@ import { resolveAiTaskPolicy } from "@/modules/ai/domain/task-policy"
 import { classifyAiTaskKind, resolveTokenGuard } from "@/modules/ai/domain/generation"
 import { AI_CREDIT_TOPUP_CREDITS, getAiCreditTopupAmountPaise } from "@/modules/ai/domain/credits"
 import { buildStoryMemoryChunks, projectContentHash } from "@/modules/story-memory/domain/chunking"
+import {
+  movieReferencesResponseSchema,
+  shotSuggestionsResponseSchema,
+} from "@/modules/ai/domain/schemas"
 
 const sql = readFileSync(join(process.cwd(), "supabase", "database.sql"), "utf8")
 
@@ -139,6 +143,42 @@ describe("AI cost optimization policy", () => {
       expect.arrayContaining(["project_summary", "character", "scene", "arc", "continuity_note"])
     )
     expect(new Set(chunks.map((chunk) => chunk.sourceHash)).size).toBe(chunks.length)
+  })
+
+  it("validates AI tool response contracts shared with the frontend", () => {
+    expect(
+      shotSuggestionsResponseSchema.safeParse({
+        shots: [
+          {
+            shotNumber: 1,
+            shotType: "Wide",
+            cameraAngle: "Eye level",
+            composition: "Rule of thirds",
+            cameraMovement: "Static",
+            purpose: "Establish location",
+            description: "A clean opening frame.",
+          },
+        ],
+      }).success
+    ).toBe(true)
+
+    expect(
+      movieReferencesResponseSchema.safeParse({
+        references: [
+          {
+            movie: "The Dark Knight",
+            scene: "Interrogation Scene",
+            youtubeId: "4f3-FJM9Rzw",
+            thumbnail: "https://img.youtube.com/vi/4f3-FJM9Rzw/maxresdefault.jpg",
+            description: "A tense interrogation scene.",
+            matchReason: "Useful for confined-space pressure.",
+            emotion: "tense",
+            situation: "interrogation",
+            location: "police station",
+          },
+        ],
+      }).success
+    ).toBe(true)
   })
 })
 

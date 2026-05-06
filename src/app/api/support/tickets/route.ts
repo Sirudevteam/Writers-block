@@ -3,7 +3,7 @@ import { z } from "zod"
 import { createClient } from "@/infrastructure/db/supabase/server"
 import { createAdminClient } from "@/infrastructure/db/supabase/admin"
 import { isAllowedRequestOrigin } from "@/modules/auth/security/request-origin"
-import { getApiRatelimit, getClientIP } from "@/core/security/rate-limit"
+import { supportTicketLimitOr429 } from "@/core/security/api-ip-limit"
 
 export const dynamic = "force-dynamic"
 
@@ -38,10 +38,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 })
   }
 
-  const rl = await getApiRatelimit().limit(`support:tickets:${getClientIP(req)}`)
-  if (!rl.success) {
-    return NextResponse.json({ error: "Too many support requests. Please slow down." }, { status: 429 })
-  }
+  const tooMany = await supportTicketLimitOr429(req)
+  if (tooMany) return tooMany
 
   const parsed = ticketSchema.safeParse(await req.json().catch(() => null))
   if (!parsed.success) return NextResponse.json({ error: "Invalid support ticket input" }, { status: 400 })

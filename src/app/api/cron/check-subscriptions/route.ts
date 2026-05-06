@@ -17,6 +17,7 @@ import { createClient } from "@supabase/supabase-js"
 import { sendExpiryWarning } from "@/infrastructure/email/email-service"
 import { logBusinessEvent } from "@/modules/master-admin/application/events"
 import { PLAN_LIMITS } from "@/shared/types/project"
+import { requestHasSecret } from "@/core/security/internal-api"
 
 // Never statically render — this route requires live DB access
 export const dynamic = "force-dynamic"
@@ -28,7 +29,6 @@ function isProductionRuntime(): boolean {
 }
 
 export async function GET(req: NextRequest) {
-  const authHeader = req.headers.get("authorization")
   const cronSecret = process.env.CRON_SECRET?.trim()
 
   if (isProductionRuntime()) {
@@ -41,10 +41,10 @@ export async function GET(req: NextRequest) {
         { status: 503 }
       )
     }
-    if (authHeader !== `Bearer ${cronSecret}`) {
+    if (!requestHasSecret(req, cronSecret, "x-cron-secret")) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
-  } else if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+  } else if (cronSecret && !requestHasSecret(req, cronSecret, "x-cron-secret")) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 

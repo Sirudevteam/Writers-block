@@ -8,6 +8,7 @@ import { resolveAiTaskPolicy } from "@/modules/ai/domain/task-policy"
 import { getAiBatchJobUrl } from "@/modules/ai/application/batch-jobs"
 import { logBusinessEvent } from "@/modules/master-admin/application/events"
 import { classifyAiTaskKind } from "@/modules/ai/domain/generation"
+import { requestHasInternalApiSecret, requestHasSecret } from "@/core/security/internal-api"
 import type { AiBatchJob, Json } from "@/infrastructure/db/types/database"
 
 export const dynamic = "force-dynamic"
@@ -27,9 +28,8 @@ function receiverFromEnv(): Receiver | null {
 
 async function verifyJobRequest(req: NextRequest, rawBody: string): Promise<boolean> {
   const secret = process.env.AI_BATCH_JOB_SECRET
-  const bearer = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "")
-  if (secret && bearer && bearer === secret) return true
-  if (secret && req.headers.get("x-ai-batch-job-secret") === secret) return true
+  if (requestHasSecret(req, secret, "x-ai-batch-job-secret")) return true
+  if (requestHasInternalApiSecret(req)) return true
 
   const receiver = receiverFromEnv()
   const url = getAiBatchJobUrl()

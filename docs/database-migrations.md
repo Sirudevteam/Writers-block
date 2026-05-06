@@ -43,6 +43,8 @@ npm run build
 - Keep the schema as exactly one SQL file: `supabase/database.sql`.
 - For any schema change, edit `supabase/database.sql`, regenerate DB types, and run the verification commands.
 - The schema is idempotent where practical, but a fresh database is still the intended target for this single-file baseline.
+- All `SECURITY DEFINER` functions must declare an explicit trusted `search_path`.
+- Service-role-only RPCs must revoke public execute access before granting only the intended roles.
 
 ## DB Type Hygiene
 

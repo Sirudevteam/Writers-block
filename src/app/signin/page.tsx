@@ -13,6 +13,7 @@ type SignInPageProps = {
     next?: string
     error?: string
     verified?: string
+    invite?: string
   }>
 }
 
@@ -34,9 +35,14 @@ function getInitialSignInNotice(rawVerified: string | undefined): string | null 
 
 export default async function SignInPage({ searchParams }: SignInPageProps) {
   const resolvedSearchParams = await searchParams
-  const nextPath = getSafeNextPath(resolvedSearchParams?.next)
+  const inviteToken = resolvedSearchParams?.invite?.trim()
+  const inviteNext = inviteToken ? `/dashboard/org?invite=${encodeURIComponent(inviteToken)}` : undefined
+  const nextPath = getSafeNextPath(resolvedSearchParams?.next ?? inviteNext)
   const initialError = getInitialSignInError(resolvedSearchParams?.error)
-  const initialNotice = getInitialSignInNotice(resolvedSearchParams?.verified)
+  const initialNotice =
+    inviteToken
+      ? "Sign in with the invited email, then accept the organization invite."
+      : getInitialSignInNotice(resolvedSearchParams?.verified)
 
   return (
     <AuthShell mode="signin">

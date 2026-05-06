@@ -1,6 +1,6 @@
 # AI Cost Controls and Project Quotas
 
-**Last updated:** May 5, 2026
+**Last updated:** May 6, 2026
 
 This document is the source of truth for the current AI generation architecture, provider router, story memory, monthly AI credits, top-ups, cost tracking, and Free-plan project creation policy.
 
@@ -41,9 +41,9 @@ Related files:
 - [supabase/database.sql](../supabase/database.sql)
 - [src/infrastructure/db/types/database.ts](../src/infrastructure/db/types/database.ts)
 - [src/app/api/projects/route.ts](../src/app/api/projects/route.ts)
-- [modules/projects/application/project-service.ts](../modules/projects/application/project-service.ts)
-- [modules/projects/infrastructure/project-repository.ts](../modules/projects/infrastructure/project-repository.ts)
-- [modules/projects/ui/use-projects.ts](../modules/projects/ui/use-projects.ts)
+- [src/modules/projects/application/project-service.ts](../src/modules/projects/application/project-service.ts)
+- [src/modules/projects/infrastructure/project-repository.ts](../src/modules/projects/infrastructure/project-repository.ts)
+- [src/modules/projects/presentation/hooks/use-projects.ts](../src/modules/projects/presentation/hooks/use-projects.ts)
 
 ## AI Router
 
@@ -134,7 +134,7 @@ Project memory is stored in Supabase Postgres with pgvector and built through La
 
 Generation uses story memory only when a valid project id belongs to the current user. If memory is missing, stale, or unavailable, `GenerationService` falls back to project fields and the recent screenplay tail instead of blocking generation.
 
-Memory indexing is queued after project creation/update when screenplay metadata or content changes. Automatic processing requires QStash. Without QStash, the status row can be marked `pending`, and operators can call the worker directly with `STORY_MEMORY_JOB_SECRET`.
+Memory indexing is queued after project creation/update when screenplay metadata or content changes. Automatic processing requires QStash. Without QStash, the status row can be marked `pending`, and operators can call the worker directly with `STORY_MEMORY_JOB_SECRET` or the app-owned `INTERNAL_API_SECRET` fallback.
 
 ## Editable Story Bible
 
@@ -167,6 +167,7 @@ Required/default env:
 - `STORY_MEMORY_MAX_CONTEXT_TOKENS=3000`
 - `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY`, `QSTASH_NEXT_SIGNING_KEY` for automatic async indexing
 - `STORY_MEMORY_JOB_SECRET` optional direct worker fallback
+- `INTERNAL_API_SECRET` optional shared fallback for app-owned background job callers
 - `AI_PROVIDER_MOCK=true` only for E2E/deterministic CI runs
 
 Related files:
@@ -180,7 +181,7 @@ Related files:
 
 Prompt context caching is stored in `public.ai_prompt_cache_entries`, keyed by user, project, provider, model, and context hash. Provider cache features are used where supported; cache-read and cache-creation tokens are still recorded in `usage_logs`.
 
-Non-real-time tasks can be queued through `POST /api/ai/batch-jobs` and processed by `POST /api/jobs/ai-batch`. Batch jobs are stored in `public.ai_batch_jobs`, protected by auth/rate limits, and claimed/completed through service-role RPCs.
+Non-real-time tasks can be queued through `POST /api/ai/batch-jobs` and processed by `POST /api/jobs/ai-batch`. Batch jobs are stored in `public.ai_batch_jobs`, protected by auth/rate limits, and claimed/completed through service-role RPCs. The worker route accepts QStash signatures, `AI_BATCH_JOB_SECRET`, or `INTERNAL_API_SECRET`.
 
 AI response feedback is accepted by `POST /api/ai/feedback` and stored in `public.ai_generation_feedback` with request id, endpoint, provider, model, complexity, rating, and optional reason. Admin AI-cost reporting can use this data to decide where cheaper models are good enough.
 

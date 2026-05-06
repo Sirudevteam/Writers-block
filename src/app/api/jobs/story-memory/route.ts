@@ -9,6 +9,7 @@ import {
   indexProjectStoryMemory,
 } from "@/modules/story-memory/application/story-memory-service"
 import { logBusinessEvent } from "@/modules/master-admin/application/events"
+import { requestHasInternalApiSecret, requestHasSecret } from "@/core/security/internal-api"
 import type { Json } from "@/infrastructure/db/types/database"
 import type { StoryMemoryIndexProject } from "@/modules/story-memory/domain/types"
 
@@ -29,9 +30,8 @@ function receiverFromEnv(): Receiver | null {
 
 async function verifyJobRequest(req: NextRequest, rawBody: string): Promise<boolean> {
   const secret = process.env.STORY_MEMORY_JOB_SECRET || process.env.AI_BATCH_JOB_SECRET
-  const bearer = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "")
-  if (secret && bearer && bearer === secret) return true
-  if (secret && req.headers.get("x-story-memory-job-secret") === secret) return true
+  if (requestHasSecret(req, secret, "x-story-memory-job-secret")) return true
+  if (requestHasInternalApiSecret(req)) return true
 
   const receiver = receiverFromEnv()
   const url = getStoryMemoryJobUrl()

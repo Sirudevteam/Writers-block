@@ -6,7 +6,7 @@
  *
  * Setup in Razorpay Dashboard → Settings → Webhooks:
  *   URL: https://yourdomain.com/api/razorpay/webhook
- *   Events: payment.captured
+ *   Events: payment.captured and subscription.*
  *   Secret: set RAZORPAY_WEBHOOK_SECRET in your environment
  */
 

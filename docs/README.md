@@ -2,46 +2,70 @@
 
 **Last updated:** May 6, 2026
 
-This directory contains the operational and architecture notes that should stay aligned with production behavior. Use this file as the index before changing auth, billing, IAM, security, performance, or infrastructure code.
+This directory is the managed documentation set for the current product and platform. Start with the handbook, then use the focused references for implementation details.
 
-## Sources Of Truth
+## Read Order
+
+| Step | Document | Use it for |
+|---:|---|---|
+| 1 | [current-platform-handbook.md](current-platform-handbook.md) | Merged product, backend, security, billing, AI, database, and operations summary |
+| 2 | [security-architecture.md](security-architecture.md) | Defense-in-depth controls, middleware, CSP, route policy, WAF, rate limits, secrets, audit, incident response |
+| 3 | [auth-and-billing-current-behavior.md](auth-and-billing-current-behavior.md) | OTP auth, Master Admin sign-in, Razorpay Subscriptions, one-time payments, PDF export, plan state |
+| 4 | [ai-cost-and-project-quotas.md](ai-cost-and-project-quotas.md) | GenerationService, AI routing, budgets, top-ups, story memory, Story Bible, project quotas |
+| 5 | [iam-enterprise.md](iam-enterprise.md) | Organization IAM, tenant policy, MFA/AAL2, SSO, SCIM |
+| 6 | [database-migrations.md](database-migrations.md) | Single Supabase schema source, setup, DB type regeneration |
+| 7 | [performance-architecture.md](performance-architecture.md) | Current build baseline, middleware/rendering cost, bottlenecks, measurement workflow |
+
+## Focused References
 
 | Document | Purpose |
 |---|---|
-| [auth-and-billing-current-behavior.md](auth-and-billing-current-behavior.md) | Current OTP auth, Master Admin sign-in, server auth, Razorpay webhook behavior, subscriptions, and ₹99 clean PDF export behavior |
-| [ai-cost-and-project-quotas.md](ai-cost-and-project-quotas.md) | GenerationService flow, story memory, direct-provider AI routing, monthly AI credits, paid top-ups, prompt caching, batch jobs, feedback, Free lifetime project credits, and project quota enforcement |
 | [admin-operators.md](admin-operators.md) | Granting, revoking, and troubleshooting `master_admin.users` operator access |
-| [iam-enterprise.md](iam-enterprise.md) | Organization IAM, active org scoping, MFA flags, and module boundaries |
-| [enterprise-product-logic.md](enterprise-product-logic.md) | Enterprise product implementation: invites, tenant policy, SSO/SCIM, Razorpay Subscriptions, collaboration, support/legal, and admin job health |
-| [system-architecture-rules.md](system-architecture-rules.md) | Enterprise-grade web/mobile system flow across client, CDN/WAF, gateway, identity, authorization, services, data, observability, and scalability layers |
-| [security-architecture.md](security-architecture.md) | Defense-in-depth model, middleware scope, WAF, rate limits, audit logs, and incident response |
-| [performance-architecture.md](performance-architecture.md) | Current build baseline, Core Web Vitals targets, middleware scope, streaming behavior, and DB indexes |
-| [database-migrations.md](database-migrations.md) | Single Supabase schema setup, hygiene rules, and DB type regeneration |
-| [gap-closure-roadmap.md](gap-closure-roadmap.md) | Sequenced Release 1-4 product and engineering roadmap, including Story Bible and E2E/eval foundations |
-| [supabase-auth-email-templates.md](supabase-auth-email-templates.md) | Supabase hosted email template status and why runtime auth uses Resend OTPs |
+| [enterprise-product-logic.md](enterprise-product-logic.md) | Enterprise feature scope and operational notes across invites, SSO/SCIM, billing, support, collaboration, cleanup |
+| [gap-closure-roadmap.md](gap-closure-roadmap.md) | Release sequencing and remaining product/engineering roadmap |
+| [supabase-auth-email-templates.md](supabase-auth-email-templates.md) | Why hosted Supabase auth emails are reference-only and Resend owns runtime OTP email |
+| [system-architecture-rules.md](system-architecture-rules.md) | Long-term enterprise architecture principles and current monolith mapping |
 
-## Related Documentation
+## Related Repository Docs
 
 | Location | Purpose |
 |---|---|
-| [../README.md](../README.md) | Product overview, setup, architecture, scripts, and deployment checklist |
-| [../CLAUDE.md](../CLAUDE.md) | Maintainer and code-agent guidance for architecture, performance, and common tasks |
+| [../README.md](../README.md) | Product overview, setup, scripts, deployment checklist |
+| [../CLAUDE.md](../CLAUDE.md) | Maintainer and code-agent guidance |
 | [../emails/README.md](../emails/README.md) | Runtime Resend email ownership and legacy Supabase template files |
-| [../infra/README.md](../infra/README.md) | Terraform and Cloudflare operations guide |
-| [../.env.example](../.env.example) | Environment variable catalog for local and production deployments |
+| [../infra/README.md](../infra/README.md) | Terraform and Cloudflare operations |
+| [../.env.example](../.env.example) | Environment variable catalog |
 
-## Documentation Rules
+## Source-Of-Truth Rules
 
-- Keep public routes, API paths, database schema names, and env var names exact.
-- Treat `supabase/database.sql` as the single Supabase schema source of truth.
-- Keep `/` documented as a static public page outside the middleware matcher unless the code intentionally changes.
-- Keep Razorpay subscription entitlement writes documented as webhook-source-of-truth unless that business rule intentionally changes.
-- Keep SSO/SCIM and organization security policy routes documented in IAM and security docs when route policy changes.
-- Keep ₹99 clean PDF purchases documented as webhook-created and atomically consumed by service-role RPC.
-- Keep Free project limits documented as lifetime creation credits, not reusable active slots.
-- Keep AI provider routing documented as direct OpenAI/Gemini/Anthropic only.
-- Keep story memory env vars, pgvector schema, and `/api/jobs/story-memory` worker behavior in sync across `.env.example`, `supabase/database.sql`, and [ai-cost-and-project-quotas.md](ai-cost-and-project-quotas.md).
-- Keep Story Bible routes, RLS policies, and DB types in sync across `supabase/database.sql`, [database-migrations.md](database-migrations.md), and editor UI.
-- Re-run `npm run build` before changing bundle-size or route baseline numbers in performance docs.
-- Keep `README.md`, `.env.example`, and this index in sync when new route groups, custom schemas, or required env vars are added.
-- Mark uncertain removals as "needs confirmation" rather than deleting historical context.
+- Current platform behavior belongs first in [current-platform-handbook.md](current-platform-handbook.md).
+- Detailed security behavior belongs in [security-architecture.md](security-architecture.md).
+- Detailed auth and payment behavior belongs in [auth-and-billing-current-behavior.md](auth-and-billing-current-behavior.md).
+- Detailed AI, cost, story memory, Story Bible, and project quota behavior belongs in [ai-cost-and-project-quotas.md](ai-cost-and-project-quotas.md).
+- Detailed IAM, SSO, and SCIM behavior belongs in [iam-enterprise.md](iam-enterprise.md).
+- Database schema changes belong in `supabase/database.sql`; do not create parallel SQL migration docs while this repo uses the single-file baseline.
+- Environment variable changes must update `.env.example`, [../README.md](../README.md), and the relevant focused doc in the same change.
+
+## Documentation Maintenance Checklist
+
+Run this checklist when changing backend behavior, product rules, secrets, database schema, or deployment requirements:
+
+1. Update the focused source-of-truth doc.
+2. Update [current-platform-handbook.md](current-platform-handbook.md) if the change affects a cross-system flow.
+3. Update [../README.md](../README.md) for setup, env vars, scripts, or deployment changes.
+4. Update `.env.example` for new, renamed, or newly-required env vars.
+5. Update [performance-architecture.md](performance-architecture.md) only after running `npm run build`.
+6. Update security tests when the doc describes a security invariant that should never regress.
+7. Prefer editing an existing doc over adding another overlapping document.
+
+## Current Non-Negotiables
+
+- Middleware covers non-static pages and API routes to provide request ids, nonce-backed CSP, WAF, CSRF, route policy, and session gates.
+- Protected APIs require Supabase `getUser()` before route handlers run.
+- Public API routes must be explicitly classified in `src/core/security/api-route-policy.ts`.
+- Machine API routes must use Razorpay HMAC, cron secret, QStash signature, SCIM bearer, or app-owned shared secret validation.
+- `AUTH_OTP_SECRET` and `MASTER_ADMIN_OTP_SECRET` are required in production.
+- Razorpay webhook setup must include `payment.captured` and `subscription.*`.
+- Free project limits are lifetime creation credits, not active reusable slots.
+- Story Bible entries are user-owned source data; vector memory is derived infrastructure.
+- `npm run typecheck`, `npm run test:security`, and `npm run build` must pass before relying on docs that describe current production behavior.

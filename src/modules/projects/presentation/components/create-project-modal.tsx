@@ -18,17 +18,24 @@ export function CreateProjectModal({ isOpen, onClose, onCreate }: CreateProjectM
   const [title, setTitle] = useState("")
   const [description, setDescription] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!title.trim()) return
 
     setIsSubmitting(true)
-    await onCreate(title, description)
-    setIsSubmitting(false)
-    setTitle("")
-    setDescription("")
-    onClose()
+    setError(null)
+    try {
+      await onCreate(title, description)
+      setTitle("")
+      setDescription("")
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create project")
+    } finally {
+      setIsSubmitting(false)
+    }
   }
 
   return (
@@ -102,6 +109,12 @@ export function CreateProjectModal({ isOpen, onClose, onCreate }: CreateProjectM
                       className="bg-background/50 border-white/10 text-white min-h-[100px] resize-none"
                     />
                   </div>
+
+                  {error && (
+                    <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+                      {error}
+                    </div>
+                  )}
 
                   <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:gap-3">
                     <Button

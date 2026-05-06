@@ -39,8 +39,11 @@ describe("enterprise product logic", () => {
     process.env.RAZORPAY_PLAN_PRO_MONTHLY = "plan_pro_monthly_test"
     expect(getRazorpaySubscriptionPlanId("pro", "monthly")).toBe("plan_pro_monthly_test")
     const route = readRepoFile("src/app/api/billing/subscriptions/route.ts")
+    const hook = readRepoFile("src/modules/billing/presentation/hooks/use-razorpay.ts")
     expect(route).toContain("subscriptions.create")
     expect(route).toContain("purpose: \"subscription\"")
+    expect(hook).toContain("/api/billing/subscriptions")
+    expect(hook).toContain("subscription_id")
   })
 
   it("keeps the enterprise schema in the consolidated migration source", () => {

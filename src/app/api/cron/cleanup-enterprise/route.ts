@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { requestHasSecret } from "@/core/security/internal-api"
 
 export const dynamic = "force-dynamic"
 
@@ -9,11 +10,10 @@ function isProductionRuntime(): boolean {
 
 function unauthorized(req: NextRequest): NextResponse | null {
   const cronSecret = process.env.CRON_SECRET?.trim()
-  const authHeader = req.headers.get("authorization")
   if (isProductionRuntime()) {
     if (!cronSecret) return NextResponse.json({ error: "Cron is not configured" }, { status: 503 })
-    if (authHeader !== `Bearer ${cronSecret}`) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-  } else if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+    if (!requestHasSecret(req, cronSecret, "x-cron-secret")) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  } else if (cronSecret && !requestHasSecret(req, cronSecret, "x-cron-secret")) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
   return null

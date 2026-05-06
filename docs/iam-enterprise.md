@@ -53,6 +53,7 @@ Supabase SSO accounts do not auto-link to password accounts, so organization mem
 
 - SCIM tokens are generated only through `PATCH /api/org/security-policy` with `rotateScimToken: true`.
 - Only the SHA-256 token hash is stored in `organization_security_policies.scim_token_hash`.
+- SCIM requests are rate-limited per organization and client IP before bearer token validation.
 - `scim_provisioned_users` records external id, username, role, active state, optional linked Supabase user id, and raw provider payload.
 - Provisioning links an existing profile by exact email when present, then syncs organization membership.
 - Deprovisioning marks the SCIM row inactive, removes org membership, and revokes app sessions.

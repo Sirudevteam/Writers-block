@@ -27,6 +27,28 @@ export function SignUpForm({ nextPath }: SignUpFormProps) {
   const [password, setPassword] = useState("")
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [ssoEmail, setSsoEmail] = useState<string | null>(null)
+
+  async function startSso(email: string) {
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetch("/api/auth/sso/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ email, next: getSafeNextPath(nextPath) }),
+      })
+      const json = (await res.json().catch(() => ({}))) as { url?: string; error?: string }
+      if (!res.ok || !json.url) {
+        setError(json.error ?? "Failed to start SSO.")
+        return
+      }
+      window.location.assign(json.url)
+    } finally {
+      setLoading(false)
+    }
+  }
 
   const rules = {
     length: password.length >= 15 && password.length <= 72,
@@ -81,6 +103,7 @@ export function SignUpForm({ nextPath }: SignUpFormProps) {
       let json: {
         ok?: boolean
         error?: string
+        code?: string
         needsSignupCode?: boolean
         email?: string
       }
@@ -92,6 +115,9 @@ export function SignUpForm({ nextPath }: SignUpFormProps) {
       }
 
       if (!res.ok || !json.ok) {
+        if (json.code === "sso_required") {
+          setSsoEmail(email)
+        }
         setError(json.error ?? mapSupabaseAuthError("unknown"))
         return
       }
@@ -125,6 +151,16 @@ export function SignUpForm({ nextPath }: SignUpFormProps) {
       </div>
 
       {error ? <AuthFormError message={error} onDismiss={() => setError(null)} className="mb-6" /> : null}
+      {ssoEmail ? (
+        <Button
+          type="button"
+          className="mb-6 h-11 w-full rounded-lg bg-white text-black hover:bg-white/90"
+          disabled={loading}
+          onClick={() => void startSso(ssoEmail)}
+        >
+          Continue with SSO
+        </Button>
+      ) : null}
 
       <form onSubmit={handleSubmit} className="space-y-5">
         <div className="space-y-2">

@@ -10,11 +10,60 @@ import type { Json } from "@/infrastructure/db/types/database"
 
 export const dynamic = "force-dynamic"
 
+function toJobSummary(job: any) {
+  return {
+    id: job.id,
+    endpoint: job.endpoint,
+    projectId: job.project_id,
+    status: job.status,
+    result: job.result,
+    errorMessage: job.error_message,
+    attempts: job.attempts,
+    createdAt: job.created_at,
+    updatedAt: job.updated_at,
+    completedAt: job.completed_at,
+  }
+}
+
 function payloadInputSize(payload: Record<string, unknown>): number {
   const text = [payload.screenplay, payload.content, payload.userPrompt, payload.context]
     .filter((value): value is string => typeof value === "string")
     .join("\n")
   return text.length
+}
+
+export async function GET(req: NextRequest) {
+  const tooMany = await apiIpLimitOr429(req)
+  if (tooMany) return tooMany
+
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  }
+
+  const admin = createAdminClient()
+  const id = req.nextUrl.searchParams.get("id")
+  let query = (admin as any)
+    .from("ai_batch_jobs")
+    .select("id, endpoint, project_id, status, result, error_message, attempts, created_at, updated_at, completed_at")
+    .eq("user_id", user.id)
+
+  if (id) {
+    query = query.eq("id", id).limit(1)
+  } else {
+    query = query.order("created_at", { ascending: false }).limit(20)
+  }
+
+  const { data, error } = await query
+  if (error) {
+    return NextResponse.json({ error: "Failed to load AI batch jobs" }, { status: 500 })
+  }
+
+  return NextResponse.json({ jobs: Array.isArray(data) ? data.map(toJobSummary) : [] })
 }
 
 export async function POST(req: NextRequest) {

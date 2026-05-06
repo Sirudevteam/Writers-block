@@ -1,18 +1,10 @@
 "use client"
 
 import { useState, useCallback } from "react"
-
-interface MovieReference {
-  movie: string
-  scene: string
-  youtubeId: string
-  thumbnail: string
-  description: string
-  matchReason: string
-  emotion: string
-  situation: string
-  location: string
-}
+import {
+  movieReferencesResponseSchema,
+  type MovieReference,
+} from "@/modules/ai/domain/schemas"
 
 interface UseMovieReferencesReturn {
   references: MovieReference[]
@@ -75,11 +67,12 @@ export function useMovieReferences(): UseMovieReferencesReturn {
 
         const data = await response.json()
 
-        if (data.references && Array.isArray(data.references)) {
-          setReferences(data.references)
-        } else {
+        const parsed = movieReferencesResponseSchema.safeParse(data)
+        if (!parsed.success) {
           throw new Error("Invalid response format")
         }
+
+        setReferences(parsed.data.references)
       } catch (err) {
         setError(err instanceof Error ? err.message : "An unknown error occurred")
         // Clear references on error so we don't show stale data

@@ -23,6 +23,8 @@ import {
   FolderOpen,
   RefreshCw,
   Wand2,
+  ThumbsUp,
+  ThumbsDown,
 } from "lucide-react"
 import { useState, useRef, useCallback, useEffect, useMemo, Suspense } from "react"
 import { Button } from "@/ui/components/button"
@@ -40,6 +42,7 @@ import { useShotSuggestions } from "@/modules/editor/presentation/hooks/use-shot
 import { useMovieReferences } from "@/modules/editor/presentation/hooks/use-movie-references"
 import { ShotSuggestions } from "@/modules/editor/presentation/components/shot-suggestions"
 import { StoryBiblePanel } from "@/modules/editor/presentation/components/story-bible-panel"
+import { ProjectCollaborationPanel } from "@/modules/editor/presentation/components/project-collaboration-panel"
 import { AutoSaveStatus, AutoSaveStatusCompact } from "@/modules/editor/presentation/components/auto-save-status"
 import { getAutoSavedContent, clearAutoSavedContent } from "@/modules/editor/presentation/hooks/use-auto-save"
 import { cn } from "@/shared/utils/cn"
@@ -48,6 +51,7 @@ import { generatePrintHTML } from "@/modules/editor/domain/screenplay-print-html
 import { useUser } from "@/modules/account/presentation/hooks/use-user"
 import { useRazorpay } from "@/modules/billing/presentation/hooks/use-razorpay"
 import type { Project } from "@/infrastructure/db/types/database"
+import { parseErrorResponse } from "@/core/http/client"
 
 const STYLE_REWRITE_OPTIONS = [
   { id: "mass_action", label: "Mass / commercial" },
@@ -59,6 +63,92 @@ const STYLE_REWRITE_OPTIONS = [
 const DEFAULT_SITE_URL = "https://writersblock.app"
 
 type QuickActionStatus = "idle" | "copied" | "shared" | "link-copied" | "copy-error" | "share-error"
+type BatchJobStatus = "queued" | "processing" | "completed" | "failed" | "cancelled"
+type BatchActionEndpoint = "improve-dialogue" | "rewrite-style"
+
+type PendingBatchJob = {
+  actionLabel: string
+  batchEndpoint: string
+  endpoint: BatchActionEndpoint
+  projectId: string | null
+  payload: Record<string, unknown>
+}
+
+type AiBatchJobSummary = {
+  id: string
+  endpoint: string
+  projectId?: string | null
+  status: BatchJobStatus
+  result?: unknown
+  errorMessage?: string | null
+  attempts?: number
+  createdAt?: string
+  updatedAt?: string
+  completedAt?: string | null
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value))
+}
+
+function isActiveBatchJob(job: AiBatchJobSummary): boolean {
+  return job.status === "queued" || job.status === "processing"
+}
+
+function getBatchResultText(result: unknown): string | null {
+  if (!isRecord(result)) return null
+  return typeof result.text === "string" && result.text.trim() ? result.text : null
+}
+
+function getBatchResultRequestId(result: unknown): string | null {
+  if (!isRecord(result)) return null
+  return typeof result.requestId === "string" ? result.requestId : null
+}
+
+function normalizeBatchJob(job: unknown): AiBatchJobSummary | null {
+  if (!isRecord(job) || typeof job.id !== "string" || typeof job.endpoint !== "string") return null
+  const status = typeof job.status === "string" ? job.status : "queued"
+  if (!["queued", "processing", "completed", "failed", "cancelled"].includes(status)) return null
+  return {
+    id: job.id,
+    endpoint: job.endpoint,
+    projectId: typeof job.projectId === "string" ? job.projectId : null,
+    status: status as BatchJobStatus,
+    result: job.result,
+    errorMessage: typeof job.errorMessage === "string" ? job.errorMessage : null,
+    attempts: typeof job.attempts === "number" ? job.attempts : undefined,
+    createdAt: typeof job.createdAt === "string" ? job.createdAt : undefined,
+    updatedAt: typeof job.updatedAt === "string" ? job.updatedAt : undefined,
+    completedAt: typeof job.completedAt === "string" ? job.completedAt : null,
+  }
+}
+
+function upsertBatchJob(current: AiBatchJobSummary[], next: AiBatchJobSummary): AiBatchJobSummary[] {
+  const existing = current.findIndex((job) => job.id === next.id)
+  if (existing === -1) return [next, ...current].slice(0, 5)
+  const copy = current.slice()
+  copy[existing] = next
+  return copy
+}
+
+async function parseBatchableAiError(
+  response: Response,
+  fallback: string,
+  pendingBatch: PendingBatchJob
+): Promise<{ message: string; batch?: PendingBatchJob }> {
+  const data = (await response.clone().json().catch(() => null)) as Record<string, unknown> | null
+  if (data?.code === "batch_required") {
+    return {
+      message: typeof data.error === "string" ? data.error : fallback,
+      batch: {
+        ...pendingBatch,
+        batchEndpoint: typeof data.batchEndpoint === "string" ? data.batchEndpoint : pendingBatch.batchEndpoint,
+      },
+    }
+  }
+
+  return { message: await parseErrorResponse(response, fallback) }
+}
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -103,6 +193,42 @@ async function copyTextToClipboard(text: string): Promise<void> {
   }
 }
 
+async function readScreenplaySse(response: Response): Promise<string> {
+  const reader = response.body?.getReader()
+  if (!reader) throw new Error("Failed to read streamed response")
+
+  const decoder = new TextDecoder()
+  let buffer = ""
+  let text = ""
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split("\n\n")
+    buffer = lines.pop() || ""
+
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue
+      try {
+        const data = JSON.parse(line.slice(6)) as {
+          done?: boolean
+          content?: string
+          error?: string
+        }
+        if (data.error) throw new Error(data.error)
+        if (data.done) return text
+        if (typeof data.content === "string") text += data.content
+      } catch (err) {
+        if (err instanceof Error) throw err
+      }
+    }
+  }
+
+  return text
+}
+
 // Wrapper component for Suspense
 function EditorPageWrapper() {
   return (
@@ -137,6 +263,7 @@ function EditorPage() {
   const {
     generatedText,
     isGenerating,
+    lastAiRequestId,
     savedProjectId,
     error,
     saveStatus,
@@ -152,6 +279,7 @@ function EditorPage() {
   const [showShots, setShowShots] = useState(false)
   const [showReferences, setShowReferences] = useState(false)
   const [showStoryBible, setShowStoryBible] = useState(false)
+  const [showCollaboration, setShowCollaboration] = useState(false)
   const [showLeftPanel, setShowLeftPanel] = useState(true)
   const [isImproving, setIsImproving] = useState(false)
   const [isContinuing, setIsContinuing] = useState(false)
@@ -165,6 +293,13 @@ function EditorPage() {
   const [isRewriting, setIsRewriting] = useState(false)
   const [quickActionStatus, setQuickActionStatus] = useState<QuickActionStatus>("idle")
   const [isCleanPdfExporting, setIsCleanPdfExporting] = useState(false)
+  const [editorActionError, setEditorActionError] = useState<string | null>(null)
+  const [pendingBatchJob, setPendingBatchJob] = useState<PendingBatchJob | null>(null)
+  const [batchJobs, setBatchJobs] = useState<AiBatchJobSummary[]>([])
+  const [isQueueingBatchJob, setIsQueueingBatchJob] = useState(false)
+  const [batchStatusError, setBatchStatusError] = useState<string | null>(null)
+  const [lastActionRequestId, setLastActionRequestId] = useState<string | null>(null)
+  const [feedbackStatus, setFeedbackStatus] = useState<"idle" | "saving" | "saved" | "error">("idle")
   const [, setPdfExportError] = useState<string | null>(null)
   const lastConfigRef = useRef<SceneConfig | null>(null)
   const quickActionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -179,6 +314,16 @@ function EditorPage() {
 
   const title = project?.title || "Untitled Screenplay"
   const activeProjectId = savedProjectId ?? project?.id ?? null
+  const visibleError = error ?? editorActionError
+  const visibleBatchJobs = useMemo(
+    () =>
+      batchJobs
+        .filter((job) => job.endpoint === "improve-dialogue" || job.endpoint === "rewrite-style")
+        .slice(0, 3),
+    [batchJobs]
+  )
+  const hasActiveBatchJobs = useMemo(() => batchJobs.some(isActiveBatchJob), [batchJobs])
+  const feedbackRequestId = lastActionRequestId ?? lastAiRequestId
 
   const setTransientQuickActionStatus = useCallback((status: QuickActionStatus) => {
     setQuickActionStatus(status)
@@ -237,6 +382,11 @@ function EditorPage() {
     clearGeneratedText()
     clearReferences()
     setHasGeneratedReferences(false)
+    setEditorActionError(null)
+    setPendingBatchJob(null)
+    setBatchStatusError(null)
+    setLastActionRequestId(null)
+    setFeedbackStatus("idle")
   }, [clearGeneratedText, clearReferences])
 
   // Check screen size
@@ -255,7 +405,123 @@ function EditorPage() {
     return () => window.removeEventListener('resize', checkMobile)
   }, [])
 
+  const refreshBatchJobs = useCallback(async (jobId?: string) => {
+    try {
+      const query = jobId ? `?id=${encodeURIComponent(jobId)}` : ""
+      const res = await fetch(`/api/ai/batch-jobs${query}`, {
+        cache: "no-store",
+        credentials: "same-origin",
+      })
+      if (!res.ok) {
+        throw new Error(await parseErrorResponse(res, "Failed to load batch jobs"))
+      }
+      const data = (await res.json()) as { jobs?: unknown[] }
+      const incoming = (Array.isArray(data.jobs) ? data.jobs : [])
+        .map(normalizeBatchJob)
+        .filter((job): job is AiBatchJobSummary => Boolean(job))
+      setBatchJobs((current) => incoming.reduce(upsertBatchJob, current))
+      setBatchStatusError(null)
+    } catch (err) {
+      setBatchStatusError(err instanceof Error ? err.message : "Failed to load batch jobs")
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!hasActiveBatchJobs) return
+    const timer = window.setInterval(() => {
+      void refreshBatchJobs()
+    }, 4000)
+    return () => window.clearInterval(timer)
+  }, [hasActiveBatchJobs, refreshBatchJobs])
+
+  const handleQueueBatchJob = useCallback(async () => {
+    if (!pendingBatchJob || isQueueingBatchJob) return
+    setIsQueueingBatchJob(true)
+    setBatchStatusError(null)
+    try {
+      const res = await fetch(pendingBatchJob.batchEndpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          endpoint: pendingBatchJob.endpoint,
+          projectId: pendingBatchJob.projectId,
+          payload: pendingBatchJob.payload,
+        }),
+      })
+      if (!res.ok) {
+        throw new Error(await parseErrorResponse(res, "Failed to queue batch job"))
+      }
+      const data = (await res.json()) as { job?: unknown }
+      const job = normalizeBatchJob(data.job)
+      if (job) {
+        setBatchJobs((current) => upsertBatchJob(current, job))
+        void refreshBatchJobs(job.id)
+      }
+      setPendingBatchJob(null)
+      setEditorActionError(null)
+    } catch (err) {
+      setBatchStatusError(err instanceof Error ? err.message : "Failed to queue batch job")
+    } finally {
+      setIsQueueingBatchJob(false)
+    }
+  }, [isQueueingBatchJob, pendingBatchJob, refreshBatchJobs])
+
+  const handleApplyBatchJobResult = useCallback(
+    (job: AiBatchJobSummary) => {
+      const text = getBatchResultText(job.result)
+      if (!text) {
+        setBatchStatusError("Batch job completed without screenplay text.")
+        return
+      }
+      setGeneratedText(text)
+      setLastActionRequestId(getBatchResultRequestId(job.result))
+      setFeedbackStatus("idle")
+      clearReferences()
+      setHasGeneratedReferences(false)
+      setPendingBatchJob(null)
+      setEditorActionError(null)
+      setBatchStatusError(null)
+      setBatchJobs((current) => current.filter((item) => item.id !== job.id))
+    },
+    [clearReferences, setGeneratedText]
+  )
+
+  const submitAiFeedback = useCallback(
+    async (rating: "up" | "down") => {
+      if (!feedbackRequestId || feedbackStatus === "saving") return
+      setFeedbackStatus("saving")
+      try {
+        const res = await fetch("/api/ai/feedback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({
+            requestId: feedbackRequestId,
+            rating,
+            metadata: {
+              source: "editor",
+              projectId: activeProjectId,
+            },
+          }),
+        })
+        if (!res.ok) {
+          throw new Error(await parseErrorResponse(res, "Failed to save feedback"))
+        }
+        setFeedbackStatus("saved")
+      } catch {
+        setFeedbackStatus("error")
+      }
+    },
+    [activeProjectId, feedbackRequestId, feedbackStatus]
+  )
+
   const handleGenerate = (config: SceneConfig) => {
+    setEditorActionError(null)
+    setPendingBatchJob(null)
+    setBatchStatusError(null)
+    setLastActionRequestId(null)
+    setFeedbackStatus("idle")
     clearReferences()
     setHasGeneratedReferences(false)
     clearGeneratedText()
@@ -267,42 +533,37 @@ function EditorPage() {
   const handleImproveDialogue = useCallback(async () => {
     if (!generatedText || isImproving) return
     setIsImproving(true)
-    let improved = ""
+    setEditorActionError(null)
+    setPendingBatchJob(null)
+    setBatchStatusError(null)
     try {
       const res = await fetch("/api/improve-dialogue", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ screenplay: generatedText, projectId: activeProjectId }),
       })
-      if (!res.ok) return
-      const reader = res.body?.getReader()
-      const decoder = new TextDecoder()
-      if (!reader) return
-      let buffer = ""
-      let streamDone = false
-      while (!streamDone) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split("\n\n")
-        buffer = lines.pop() || ""
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            try {
-              const data = JSON.parse(line.slice(6))
-              if (data.done) { streamDone = true; break }
-              if (data.content) improved += data.content
-            } catch {}
-          }
-        }
+      if (!res.ok) {
+        const parsed = await parseBatchableAiError(res, "Failed to improve dialogue", {
+          actionLabel: "Improve dialogue",
+          batchEndpoint: "/api/ai/batch-jobs",
+          endpoint: "improve-dialogue",
+          projectId: activeProjectId,
+          payload: { screenplay: generatedText },
+        })
+        if (parsed.batch) setPendingBatchJob(parsed.batch)
+        throw new Error(parsed.message)
       }
+      setLastActionRequestId(res.headers.get("X-AI-Request-Id"))
+      setFeedbackStatus("idle")
+      const improved = await readScreenplaySse(res)
       if (improved.trim()) {
         setGeneratedText(improved)
         clearReferences()
         setHasGeneratedReferences(false)
       }
-    } catch {}
-    finally {
+    } catch (err) {
+      setEditorActionError(err instanceof Error ? err.message : "Failed to improve dialogue")
+    } finally {
       setIsImproving(false)
     }
   }, [generatedText, isImproving, activeProjectId, setGeneratedText, clearReferences])
@@ -310,61 +571,45 @@ function EditorPage() {
   const handleStyleRewrite = useCallback(async () => {
     if (!generatedText || isRewriting || !canStyleRewrite) return
     setIsRewriting(true)
-    let rewritten = ""
+    setEditorActionError(null)
+    setPendingBatchJob(null)
+    setBatchStatusError(null)
     try {
       const res = await fetch("/api/rewrite-style", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ screenplay: generatedText, styleId: styleRewriteId, projectId: activeProjectId }),
       })
-      if (res.status === 403) {
-        setIsRewriting(false)
-        return
+      if (!res.ok) {
+        const parsed = await parseBatchableAiError(res, "Failed to rewrite screenplay", {
+          actionLabel: "Style rewrite",
+          batchEndpoint: "/api/ai/batch-jobs",
+          endpoint: "rewrite-style",
+          projectId: activeProjectId,
+          payload: { screenplay: generatedText, styleId: styleRewriteId },
+        })
+        if (parsed.batch) setPendingBatchJob(parsed.batch)
+        throw new Error(parsed.message)
       }
-      const reader = res.body?.getReader()
-      const decoder = new TextDecoder()
-      if (!reader) {
-        setIsRewriting(false)
-        return
-      }
-      let buffer = ""
-      let streamDone = false
-      while (!streamDone) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split("\n\n")
-        buffer = lines.pop() || ""
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            try {
-              const data = JSON.parse(line.slice(6))
-              if (data.done) {
-                streamDone = true
-                break
-              }
-              if (data.content) rewritten += data.content
-            } catch {
-              /* ignore */
-            }
-          }
-        }
-      }
+      setLastActionRequestId(res.headers.get("X-AI-Request-Id"))
+      setFeedbackStatus("idle")
+      const rewritten = await readScreenplaySse(res)
       if (rewritten.trim()) {
         setGeneratedText(rewritten)
         clearReferences()
         setHasGeneratedReferences(false)
       }
-    } catch {
-      /* network */
+    } catch (err) {
+      setEditorActionError(err instanceof Error ? err.message : "Failed to rewrite screenplay")
+    } finally {
+      setIsRewriting(false)
     }
-    setIsRewriting(false)
   }, [generatedText, isRewriting, canStyleRewrite, styleRewriteId, activeProjectId, setGeneratedText, clearReferences])
 
   const handleGenerateNextScene = useCallback(async () => {
     if (!generatedText || isContinuing) return
     setIsContinuing(true)
-    let continuation = ""
+    setEditorActionError(null)
     try {
       const config = lastConfigRef.current
       const res = await fetch("/api/generate-next", {
@@ -378,35 +623,20 @@ function EditorPage() {
           projectId: activeProjectId,
         }),
       })
-      if (!res.ok) return
-      const reader = res.body?.getReader()
-      const decoder = new TextDecoder()
-      if (!reader) return
-      let buffer = ""
-      let streamDone = false
-      while (!streamDone) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split("\n\n")
-        buffer = lines.pop() || ""
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            try {
-              const data = JSON.parse(line.slice(6))
-              if (data.done) { streamDone = true; break }
-              if (data.content) continuation += data.content
-            } catch {}
-          }
-        }
+      if (!res.ok) {
+        throw new Error(await parseErrorResponse(res, "Failed to continue screenplay"))
       }
+      setLastActionRequestId(res.headers.get("X-AI-Request-Id"))
+      setFeedbackStatus("idle")
+      const continuation = await readScreenplaySse(res)
       if (continuation.trim()) {
         setGeneratedText(generatedText + "\n\n" + continuation)
         clearReferences()
         setHasGeneratedReferences(false)
       }
-    } catch {}
-    finally {
+    } catch (err) {
+      setEditorActionError(err instanceof Error ? err.message : "Failed to continue screenplay")
+    } finally {
       setIsContinuing(false)
     }
   }, [generatedText, isContinuing, activeProjectId, setGeneratedText, clearReferences])
@@ -657,6 +887,7 @@ function EditorPage() {
   const handleToggleReferences = useCallback(() => {
     const next = !showReferences
     if (next) setShowStoryBible(false)
+    if (next) setShowCollaboration(false)
     setShowReferences(next)
     if (next) void loadReferences()
   }, [loadReferences, showReferences])
@@ -664,8 +895,18 @@ function EditorPage() {
   const handleToggleStoryBible = useCallback(() => {
     const next = !showStoryBible
     if (next) setShowReferences(false)
+    if (next) setShowCollaboration(false)
     setShowStoryBible(next)
   }, [showStoryBible])
+
+  const handleToggleCollaboration = useCallback(() => {
+    const next = !showCollaboration
+    if (next) {
+      setShowReferences(false)
+      setShowStoryBible(false)
+    }
+    setShowCollaboration(next)
+  }, [showCollaboration])
 
   // Handle regenerating references
   const handleRegenerateReferences = useCallback(() => {
@@ -677,6 +918,10 @@ function EditorPage() {
     (text: string) => {
       setGeneratedText(text)
       setHasGeneratedReferences(false)
+      setPendingBatchJob(null)
+      setBatchStatusError(null)
+      setLastActionRequestId(null)
+      setFeedbackStatus("idle")
       clearReferences()
     },
     [setGeneratedText, clearReferences]
@@ -740,6 +985,19 @@ function EditorPage() {
               Story Bible
             </Button>
 
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleToggleCollaboration}
+              className={cn(
+                "hidden lg:flex text-xs gap-2 h-9",
+                showCollaboration ? 'text-cinematic-blue bg-cinematic-blue/10' : 'text-muted-foreground hover:text-white'
+              )}
+            >
+              <MessageSquare className="w-4 h-4" />
+              Comments
+            </Button>
+
             {/* References Toggle - Desktop */}
             <Button
               variant="ghost"
@@ -769,12 +1027,40 @@ function EditorPage() {
                 hasUnsavedChanges={hasUnsavedChanges}
               />
             )}
+            {feedbackRequestId && generatedText && !isGenerating && (
+              <div className="hidden items-center gap-1 lg:flex">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={feedbackStatus === "saving"}
+                  onClick={() => void submitAiFeedback("up")}
+                  className="h-8 w-8 p-0 text-white/45 hover:bg-green-500/10 hover:text-green-300"
+                  title="Good AI result"
+                >
+                  <ThumbsUp className="h-4 w-4" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={feedbackStatus === "saving"}
+                  onClick={() => void submitAiFeedback("down")}
+                  className="h-8 w-8 p-0 text-white/45 hover:bg-red-500/10 hover:text-red-300"
+                  title="Poor AI result"
+                >
+                  <ThumbsDown className="h-4 w-4" />
+                </Button>
+                {feedbackStatus === "saved" && <span className="text-[10px] text-green-300">Saved</span>}
+                {feedbackStatus === "error" && <span className="text-[10px] text-red-300">Failed</span>}
+              </div>
+            )}
           </div>
         </div>
 
         {/* Error Banner */}
         <AnimatePresence>
-          {error && (
+          {visibleError && (
             <motion.div
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: "auto" }}
@@ -782,10 +1068,75 @@ function EditorPage() {
               className="bg-red-500/10 border-b border-red-500/20 px-4 py-2 flex items-center gap-2 text-red-400 text-sm"
             >
               <AlertCircle className="w-4 h-4" />
-              {error}
+              {visibleError}
             </motion.div>
           )}
         </AnimatePresence>
+
+        {(pendingBatchJob || visibleBatchJobs.length > 0 || batchStatusError) && (
+          <div className="border-b border-cinematic-blue/20 bg-cinematic-blue/10 px-4 py-3 text-sm">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="min-w-0">
+                <p className="font-medium text-cinematic-blue">Batch AI job</p>
+                <p className="text-xs text-white/55">
+                  Long screenplay actions can run in the background and apply back into the editor when complete.
+                </p>
+                {batchStatusError && <p className="mt-1 text-xs text-red-300">{batchStatusError}</p>}
+              </div>
+              {pendingBatchJob && (
+                <Button
+                  type="button"
+                  size="sm"
+                  className="h-9 shrink-0 bg-white text-black hover:bg-white/90"
+                  disabled={isQueueingBatchJob}
+                  onClick={handleQueueBatchJob}
+                >
+                  {isQueueingBatchJob ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                  Queue {pendingBatchJob.actionLabel}
+                </Button>
+              )}
+            </div>
+
+            {visibleBatchJobs.length > 0 && (
+              <div className="mt-3 grid gap-2 lg:grid-cols-3">
+                {visibleBatchJobs.map((job) => {
+                  const resultText = getBatchResultText(job.result)
+                  return (
+                    <div key={job.id} className="rounded-lg border border-white/10 bg-black/20 px-3 py-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="truncate text-xs font-medium text-white/80">
+                          {job.endpoint === "rewrite-style" ? "Style rewrite" : "Improve dialogue"}
+                        </span>
+                        <span className="shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-[10px] uppercase tracking-wide text-white/60">
+                          {job.status}
+                        </span>
+                      </div>
+                      {job.status === "failed" && (
+                        <p className="mt-2 text-xs text-red-300">{job.errorMessage ?? "Batch job failed."}</p>
+                      )}
+                      {job.status === "completed" && resultText && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="mt-2 h-8 bg-cinematic-blue text-black hover:bg-cinematic-blue/90"
+                          onClick={() => handleApplyBatchJobResult(job)}
+                        >
+                          Apply result
+                        </Button>
+                      )}
+                      {isActiveBatchJob(job) && (
+                        <p className="mt-2 flex items-center gap-2 text-xs text-white/45">
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                          Processing in background
+                        </p>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Main Content */}
         <div className="flex-1 flex min-h-0 overflow-hidden">
@@ -958,6 +1309,24 @@ function EditorPage() {
                   projectId={activeProjectId}
                   screenplay={generatedText}
                   onClose={() => setShowStoryBible(false)}
+                />
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Right Panel - Collaboration */}
+          <AnimatePresence>
+            {showCollaboration && (
+              <motion.div
+                initial={{ opacity: 0, width: 0 }}
+                animate={{ opacity: 1, width: 360 }}
+                exit={{ opacity: 0, width: 0 }}
+                transition={{ duration: 0.2 }}
+                className="hidden lg:flex flex-shrink-0 border-l border-white/10 bg-[#0a0a0a]/50 backdrop-blur flex-col overflow-hidden"
+              >
+                <ProjectCollaborationPanel
+                  projectId={activeProjectId}
+                  onClose={() => setShowCollaboration(false)}
                 />
               </motion.div>
             )}

@@ -9,6 +9,9 @@ import {
   FolderOpen,
   CreditCard,
   Settings,
+  LifeBuoy,
+  Building2,
+  FileText,
   Menu,
   X,
   Film,
@@ -35,7 +38,10 @@ interface NavItem {
 const consumerNavItems: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/dashboard/projects", label: "My Projects", icon: FolderOpen },
+  { href: "/dashboard/documents", label: "Documents", icon: FileText },
   { href: "/dashboard/subscription", label: "Subscription", icon: CreditCard },
+  { href: "/dashboard/org", label: "Organization", icon: Building2 },
+  { href: "/dashboard/support", label: "Support", icon: LifeBuoy },
   { href: "/dashboard/settings", label: "Settings", icon: Settings },
 ]
 

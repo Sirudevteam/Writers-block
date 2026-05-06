@@ -116,6 +116,26 @@ const aiBatchRatelimit = redis
     })
   : null
 
+// SCIM is machine-authenticated, but still needs throttling for bad-token floods.
+const scimRatelimit = redis
+  ? new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(120, "1 m"),
+      analytics: true,
+      prefix: "ratelimit:scim",
+    })
+  : null
+
+// Anonymous support intake is public; keep it tighter than the generic API guard.
+const supportTicketRatelimit = redis
+  ? new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(10, "10 m"),
+      analytics: true,
+      prefix: "ratelimit:support:tickets",
+    })
+  : null
+
 // ── Per-user plan-based daily rate limiters ─────────────────────────────────
 
 // Free plan: 5 AI generations/day per user
@@ -170,6 +190,18 @@ const closedRatelimit = {
   }),
 }
 
+function fallbackRatelimit(scope: string) {
+  if (isProductionRuntime()) {
+    const message =
+      scope === "Auth"
+        ? "Auth routes blocked because Upstash Redis is not configured"
+        : `${scope} routes blocked because Upstash Redis is not configured`
+    console.error(`[ratelimit] ${message}`)
+    return closedRatelimit as unknown as Ratelimit
+  }
+  return devRatelimit as unknown as Ratelimit
+}
+
 // ── Public accessors ────────────────────────────────────────────────────────
 
 export function getGenerationRatelimit() {
@@ -182,55 +214,65 @@ export function getGenerationRatelimit() {
 
 export function getApiRatelimit() {
   if (!apiRatelimit) {
-    return devRatelimit as unknown as Ratelimit
+    return fallbackRatelimit("API")
   }
   return apiRatelimit
 }
 
 export function getAuthRatelimit() {
   if (!authRatelimit) {
-    if (isProductionRuntime()) {
-      console.error("[ratelimit] Auth routes blocked because Upstash Redis is not configured")
-      return closedRatelimit as unknown as Ratelimit
-    }
-    return devRatelimit as unknown as Ratelimit
+    return fallbackRatelimit("Auth")
   }
   return authRatelimit
 }
 
 export function getPaymentOrderRatelimit() {
   if (!paymentOrderRatelimit) {
-    return devRatelimit as unknown as Ratelimit
+    return fallbackRatelimit("Payment order")
   }
   return paymentOrderRatelimit
 }
 
 export function getPaymentVerifyRatelimit() {
   if (!paymentVerifyRatelimit) {
-    return devRatelimit as unknown as Ratelimit
+    return fallbackRatelimit("Payment verify")
   }
   return paymentVerifyRatelimit
 }
 
 export function getPdfExportRatelimit() {
   if (!pdfExportRatelimit) {
-    return devRatelimit as unknown as Ratelimit
+    return fallbackRatelimit("PDF export")
   }
   return pdfExportRatelimit
 }
 
 export function getAiFeedbackRatelimit() {
   if (!aiFeedbackRatelimit) {
-    return devRatelimit as unknown as Ratelimit
+    return fallbackRatelimit("AI feedback")
   }
   return aiFeedbackRatelimit
 }
 
 export function getAiBatchRatelimit() {
   if (!aiBatchRatelimit) {
-    return devRatelimit as unknown as Ratelimit
+    return fallbackRatelimit("AI batch")
   }
   return aiBatchRatelimit
+}
+
+export function getScimRatelimit() {
+  if (!scimRatelimit) {
+    return fallbackRatelimit("SCIM")
+  }
+  return scimRatelimit
+}
+
+export function getSupportTicketRatelimit() {
+  if (!supportTicketRatelimit) {
+    return fallbackRatelimit("Support ticket")
+  }
+  return supportTicketRatelimit
 }
 
 /**

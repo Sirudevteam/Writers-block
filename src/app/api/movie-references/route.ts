@@ -3,9 +3,12 @@ import { createClient } from "@/infrastructure/db/supabase/server"
 import { apiIpLimitOr429 } from "@/core/security/api-ip-limit"
 import { getEffectivePlanForApiUser } from "@/modules/ai/application/effective-plan"
 import { runAiRateLimits } from "@/modules/ai/application/rate-limits"
-import { movieReferencesSchema } from "@/modules/ai/domain/schemas"
+import {
+  movieReferencesAiArraySchema,
+  movieReferencesSchema,
+  type MovieReference,
+} from "@/modules/ai/domain/schemas"
 import { zodErrorJsonResponse } from "@/core/http/json"
-import { z } from "zod"
 import { logBusinessEvent } from "@/modules/master-admin/application/events"
 import { generateTextWithService } from "@/modules/ai/application/generation-service"
 import { aiRouteErrorResponse } from "@/modules/ai/infrastructure/provider-router"
@@ -13,32 +16,6 @@ import { aiBudgetHeaders, isAiBudgetBlockedError } from "@/modules/ai/applicatio
 import { resolveAiTaskPolicy } from "@/modules/ai/domain/task-policy"
 import { loadProjectForAiContext } from "@/modules/story-memory/application/project-context"
 import { fallbackContextForProject } from "@/modules/story-memory/application/story-memory-service"
-
-export interface MovieReference {
-  movie: string
-  scene: string
-  youtubeId: string
-  thumbnail: string
-  description: string
-  matchReason: string
-  emotion: string
-  situation: string
-  location: string
-}
-
-const movieReferenceSchema = z.object({
-  movie: z.string().trim().min(1).max(200),
-  scene: z.string().trim().min(1).max(200),
-  youtubeId: z.string().trim().regex(/^[a-zA-Z0-9_-]{6,20}$/),
-  thumbnail: z.string().url().max(2_000).optional(),
-  description: z.string().trim().min(1).max(1_000),
-  matchReason: z.string().trim().min(1).max(1_000),
-  emotion: z.string().trim().min(1).max(80),
-  situation: z.string().trim().min(1).max(120),
-  location: z.string().trim().min(1).max(120),
-})
-
-const movieReferencesResponseSchema = z.array(movieReferenceSchema).min(1).max(5)
 
 // Fallback movie references database for when AI fails or for common patterns
 const fallbackReferences: Record<string, MovieReference[]> = {
@@ -297,7 +274,7 @@ Analyze this screenplay and suggest relevant movie reference scenes.`
         }
 
         // Ensure all required fields are present
-        const validated = movieReferencesResponseSchema.safeParse(references)
+        const validated = movieReferencesAiArraySchema.safeParse(references)
         if (!validated.success) {
           throw new Error("Invalid response structure")
         }

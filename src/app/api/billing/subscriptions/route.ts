@@ -8,6 +8,7 @@ import {
   recordBillingLedger,
   type PaidPlan,
 } from "@/modules/billing/application/razorpay-subscriptions"
+import type { BillingCycle } from "@/shared/types/project"
 
 export const dynamic = "force-dynamic"
 
@@ -23,6 +24,17 @@ const createSchema = z.object({
   billingCycle: z.enum(["monthly", "annual"]).default("monthly"),
   taxProfile: taxProfileSchema,
 })
+
+const PLAN_NAMES: Record<PaidPlan, Record<BillingCycle, string>> = {
+  pro: {
+    monthly: "Pro Plan (Monthly)",
+    annual: "Pro Plan (Annual)",
+  },
+  premium: {
+    monthly: "Premium Plan (Monthly)",
+    annual: "Premium Plan (Annual)",
+  },
+}
 
 async function getOrCreateRazorpayCustomer(params: {
   supabase: any
@@ -100,6 +112,9 @@ export async function POST(req: NextRequest) {
     })
 
     const razorpay = createRazorpayClient()
+    const keyId = process.env.RAZORPAY_KEY_ID?.trim()
+    if (!keyId) throw new Error("Razorpay is not configured")
+
     const subscription = await (razorpay as any).subscriptions.create({
       plan_id: planId,
       customer_id: customerId,
@@ -131,6 +146,10 @@ export async function POST(req: NextRequest) {
         subscriptionId: subscription.id,
         status: subscription.status,
         shortUrl: subscription.short_url ?? null,
+        keyId,
+        plan: parsed.data.plan,
+        billingCycle: parsed.data.billingCycle,
+        planName: PLAN_NAMES[parsed.data.plan as PaidPlan][parsed.data.billingCycle],
       },
       { status: 201, headers: IAM_JSON_HEADERS }
     )

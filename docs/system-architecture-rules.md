@@ -1,6 +1,6 @@
 # System Architecture Rules
 
-**Last updated:** May 5, 2026
+**Last updated:** May 6, 2026
 **Objective:** Define a secure, scalable, enterprise-grade system flow for all client interactions across web and mobile platforms.
 
 ## Current Implementation Mapping
@@ -8,9 +8,9 @@
 Writers Block is currently a Next.js/Supabase application deployed behind Cloudflare. For this phase, Cloudflare plus Next.js middleware is the hardened perimeter for the monolith.
 
 - Cloudflare provides CDN, WAF, DDoS protection, bot filtering, TLS enforcement, and static asset caching.
-- Next.js middleware provides the app-side WAF, CSRF checks, request correlation, session refresh, protected API authentication, dashboard/editor guards, and Master Admin host/operator/MFA checks.
+- Next.js middleware provides nonce-backed CSP, the app-side WAF, CSRF checks, request correlation, session refresh, protected API authentication, dashboard/editor guards, and Master Admin host/operator/MFA checks for non-static pages and API routes.
 - API route policy is centralized in `src/core/security/api-route-policy.ts`: `/api/auth/*` and `/api/support/tickets` are public, `/api/razorpay/webhook`, `/api/cron/*`, `/api/jobs/*`, and `/api/scim/*` are machine-auth routes, `/api/master-admin/*` uses the Master Admin guard path, and all other APIs require a Supabase Auth session before route handlers run.
-- Route handlers still perform domain authorization such as org RBAC, Master Admin privilege checks, payment HMAC validation, service-role RPCs, and rate limits.
+- Route handlers still perform domain authorization such as org RBAC, Master Admin privilege checks, payment HMAC validation, machine-route shared-secret validation, service-role RPCs, and rate limits.
 - Kong/NGINX gateway deployment, Kubernetes orchestration, MinIO object storage, and extracted microservices remain future platform work until service boundaries justify independent deployment and scaling.
 
 ## Final Principle

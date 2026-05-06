@@ -23,6 +23,29 @@ export function SignInForm({ nextPath, initialError = null, initialNotice = null
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(initialError)
   const [notice, setNotice] = useState<string | null>(initialNotice)
+  const [ssoEmail, setSsoEmail] = useState<string | null>(null)
+
+  async function startSso(email: string) {
+    setLoading(true)
+    setError(null)
+    setNotice(null)
+    try {
+      const res = await fetch("/api/auth/sso/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ email, next: getSafeNextPath(nextPath) }),
+      })
+      const json = (await res.json().catch(() => ({}))) as { url?: string; error?: string }
+      if (!res.ok || !json.url) {
+        setError(json.error ?? "Failed to start SSO.")
+        return
+      }
+      window.location.assign(json.url)
+    } finally {
+      setLoading(false)
+    }
+  }
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -53,9 +76,9 @@ export function SignInForm({ nextPath, initialError = null, initialNotice = null
         body: JSON.stringify({ email, password }),
       })
 
-      let json: { ok?: boolean; error?: string; needsOtp?: boolean }
+      let json: { ok?: boolean; error?: string; needsOtp?: boolean; code?: string }
       try {
-        json = (await res.json()) as { ok?: boolean; error?: string; needsOtp?: boolean }
+        json = (await res.json()) as { ok?: boolean; error?: string; needsOtp?: boolean; code?: string }
       } catch {
         setError("Something went wrong. Try again.")
         return
@@ -63,6 +86,11 @@ export function SignInForm({ nextPath, initialError = null, initialNotice = null
 
       if (!res.ok || !json.ok) {
         const message = json.error ?? mapSupabaseAuthError("unknown")
+        if (json.code === "sso_required") {
+          setSsoEmail(email)
+          setError(message)
+          return
+        }
         if (message === "Please confirm your email before signing in.") {
           router.push(`/verify-code?email=${encodeURIComponent(email)}&next=${encodeURIComponent(safeNext)}`)
           router.refresh()
@@ -90,6 +118,16 @@ export function SignInForm({ nextPath, initialError = null, initialNotice = null
       </div>
 
       {error ? <AuthFormError message={error} onDismiss={() => setError(null)} className="mb-6" /> : null}
+      {ssoEmail ? (
+        <Button
+          type="button"
+          className="mb-6 h-11 w-full rounded-lg bg-white text-black hover:bg-white/90"
+          disabled={loading}
+          onClick={() => void startSso(ssoEmail)}
+        >
+          Continue with SSO
+        </Button>
+      ) : null}
       {notice ? (
         <div className="mb-6 rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-4 text-sm text-emerald-300">
           {notice}

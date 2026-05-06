@@ -1,16 +1,12 @@
 "use client"
 
 import { useState, useCallback } from "react"
+import {
+  shotSuggestionsResponseSchema,
+  type ShotSuggestion,
+} from "@/modules/ai/domain/schemas"
 
-export interface ShotSuggestion {
-  shotNumber: number
-  shotType: string
-  cameraAngle: string
-  composition: string
-  cameraMovement: string
-  purpose: string
-  description: string
-}
+export type { ShotSuggestion } from "@/modules/ai/domain/schemas"
 
 interface UseShotSuggestionsReturn {
   shots: ShotSuggestion[]
@@ -44,7 +40,12 @@ export function useShotSuggestions(): UseShotSuggestionsReturn {
       }
 
       const data = await response.json()
-      setShots(data.shots)
+      const parsed = shotSuggestionsResponseSchema.safeParse(data)
+      if (!parsed.success) {
+        throw new Error("Invalid shot suggestions response")
+      }
+
+      setShots(parsed.data.shots)
     } catch (err) {
       setError(err instanceof Error ? err.message : "An error occurred")
     } finally {

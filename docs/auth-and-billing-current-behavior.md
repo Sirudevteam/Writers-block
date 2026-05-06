@@ -1,6 +1,6 @@
 # Current Auth and Billing Behavior
 
-**Last updated:** May 4, 2026
+**Last updated:** May 6, 2026
 
 This document reflects the current production behavior after the 2026 auth and payment hardening pass.
 
@@ -39,9 +39,10 @@ OTP challenge payloads are encrypted server-side when a flow must temporarily ho
 - Sign-in challenges use `AUTH_OTP_SECRET` to encrypt the withheld Supabase session.
 - Password-reset challenges do not store passwords or session payloads.
 - Master Admin challenges use `MASTER_ADMIN_OTP_SECRET`.
-- If those are unset, the code falls back to `SUPABASE_SERVICE_ROLE_KEY` and then `NEXTAUTH_SECRET` where supported.
+- Production requires explicit `AUTH_OTP_SECRET` and `MASTER_ADMIN_OTP_SECRET`.
+- Local development can fall back to `SUPABASE_SERVICE_ROLE_KEY` and then `NEXTAUTH_SECRET` where supported.
 
-Production deployments should set explicit OTP secrets so sign-in session-payload encryption is not tied to unrelated provider keys.
+Production deployments must not tie OTP session-payload encryption to unrelated provider keys.
 
 OTP challenges lock after repeated invalid attempts. IP throttles and account-keyed throttles are both applied before OTP verification.
 
@@ -116,7 +117,7 @@ Important notes:
 
 Related files:
 - [src/app/api/auth/master-admin-sign-in/route.ts](../src/app/api/auth/master-admin-sign-in/route.ts)
-- [src/modules/auth/master-admin-otp-challenges.ts](../src/modules/auth/infrastructure/master-admin-otp-challenges.ts)
+- [src/modules/auth/infrastructure/master-admin-otp-challenges.ts](../src/modules/auth/infrastructure/master-admin-otp-challenges.ts)
 - [docs/admin-operators.md](./admin-operators.md)
 
 ## Supabase Schema Requirements
@@ -156,7 +157,7 @@ Related files:
 - [src/infrastructure/db/supabase/server-auth.ts](../src/infrastructure/db/supabase/server-auth.ts)
 - [src/app/dashboard/layout.tsx](../src/app/dashboard/layout.tsx)
 - [src/app/api/user/profile/route.ts](../src/app/api/user/profile/route.ts)
-- [modules/account/application/profile-service.ts](../modules/account/application/profile-service.ts)
+- [src/modules/account/application/profile-service.ts](../src/modules/account/application/profile-service.ts)
 
 ## Razorpay Subscription Flow
 
@@ -230,8 +231,8 @@ Related files:
 - [src/app/api/razorpay/webhook/route.ts](../src/app/api/razorpay/webhook/route.ts)
 - [src/modules/billing/presentation/hooks/use-razorpay.ts](../src/modules/billing/presentation/hooks/use-razorpay.ts)
 - [src/app/editor/page.tsx](../src/app/editor/page.tsx)
-- [src/modules/screenplay-pdf.ts](../src/modules/editor/infrastructure/screenplay-pdf.ts)
-- [src/modules/screenplay-print-html.ts](../src/modules/editor/domain/screenplay-print-html.ts)
+- [src/modules/editor/infrastructure/screenplay-pdf.ts](../src/modules/editor/infrastructure/screenplay-pdf.ts)
+- [src/modules/editor/domain/screenplay-print-html.ts](../src/modules/editor/domain/screenplay-print-html.ts)
 
 ## Plan Limits and Project Creation
 
@@ -267,9 +268,9 @@ Important notes:
 Related files:
 
 - [src/app/api/projects/route.ts](../src/app/api/projects/route.ts)
-- [modules/projects/application/project-service.ts](../modules/projects/application/project-service.ts)
-- [modules/projects/infrastructure/project-repository.ts](../modules/projects/infrastructure/project-repository.ts)
-- [modules/projects/ui/use-projects.ts](../modules/projects/ui/use-projects.ts)
+- [src/modules/projects/application/project-service.ts](../src/modules/projects/application/project-service.ts)
+- [src/modules/projects/infrastructure/project-repository.ts](../src/modules/projects/infrastructure/project-repository.ts)
+- [src/modules/projects/presentation/hooks/use-projects.ts](../src/modules/projects/presentation/hooks/use-projects.ts)
 - [supabase/database.sql](../supabase/database.sql)
 - [docs/ai-cost-and-project-quotas.md](./ai-cost-and-project-quotas.md)
 

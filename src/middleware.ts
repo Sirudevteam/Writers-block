@@ -23,10 +23,67 @@ function getRequestId(request: NextRequest): string {
   return crypto.randomUUID()
 }
 
+function createNonce(): string {
+  const bytes = new Uint8Array(16)
+  crypto.getRandomValues(bytes)
+  return btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join(""))
+}
+
+function buildContentSecurityPolicy(nonce: string): string {
+  const isDev = process.env.NODE_ENV !== "production"
+  const directives = [
+    "default-src 'self'",
+    [
+      "script-src 'self'",
+      `'nonce-${nonce}'`,
+      isDev ? "'unsafe-eval'" : "",
+      "https://checkout.razorpay.com",
+      "https://cdn.razorpay.com",
+      "https://va.vercel-scripts.com",
+    ].filter(Boolean).join(" "),
+    "script-src-attr 'none'",
+    "frame-src https://api.razorpay.com https://checkout.razorpay.com",
+    [
+      "connect-src 'self'",
+      "https://*.supabase.co",
+      "wss://*.supabase.co",
+      "https://*.upstash.io",
+      "https://api.resend.com",
+      "https://api.razorpay.com",
+      "https://lumberjack.razorpay.com",
+      "https://vitals.vercel-insights.com",
+      "https://*.vercel-insights.com",
+      "https://cdn.jsdelivr.net",
+      "https://unpkg.com",
+    ].join(" "),
+    "img-src 'self' data: blob: https://img.youtube.com",
+    "style-src 'self'",
+    `style-src-elem 'self' 'nonce-${nonce}'`,
+    "style-src-attr 'unsafe-inline'",
+    "font-src 'self' data:",
+    "media-src 'self'",
+    "worker-src 'self' blob:",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'self'",
+    "upgrade-insecure-requests",
+  ]
+  return directives.join("; ")
+}
+
 export async function middleware(request: NextRequest) {
   const requestId = getRequestId(request)
+  const nonce = createNonce()
+  const contentSecurityPolicy = buildContentSecurityPolicy(nonce)
+  const requestHeaders = new Headers(request.headers)
+  requestHeaders.set("x-request-id", requestId)
+  requestHeaders.set("x-nonce", nonce)
+  requestHeaders.set("Content-Security-Policy", contentSecurityPolicy)
+  const nextResponse = () => NextResponse.next({ request: { headers: requestHeaders } })
   const withSecurityHeaders = (response: NextResponse) => {
     response.headers.set("X-Request-ID", requestId)
+    response.headers.set("Content-Security-Policy", contentSecurityPolicy)
     return applySecurityHeaders(response)
   }
   const { pathname, search } = request.nextUrl
@@ -71,7 +128,7 @@ export async function middleware(request: NextRequest) {
     return withSecurityHeaders(csrfResponse)
   }
 
-  let supabaseResponse = NextResponse.next({ request })
+  let supabaseResponse = nextResponse()
   const preserveSupabaseCookies = (response: NextResponse) => {
     supabaseResponse.cookies.getAll().forEach(({ name, value, ...options }) => {
       response.cookies.set(name, value, options)
@@ -93,7 +150,8 @@ export async function middleware(request: NextRequest) {
           cookiesToSet.forEach(({ name, value }) =>
             request.cookies.set(name, value)
           )
-          supabaseResponse = NextResponse.next({ request })
+          requestHeaders.set("cookie", request.cookies.toString())
+          supabaseResponse = nextResponse()
           cookiesToSet.forEach(({ name, value, options }) =>
             supabaseResponse.cookies.set(name, value, options)
           )
@@ -302,17 +360,6 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/dashboard",
-    "/editor",
-    "/dashboard/:path*",
-    "/editor/:path*",
-    "/signin",
-    "/signup",
-    "/forgot-password",
-    "/reset-password",
-    "/verify-code",
-    "/master-admin",
-    "/master-admin/:path*",
-    "/api/:path*",
+    "/((?!_next/static|_next/image|favicon.ico|robots.txt|sitemap.xml|.*\\.(?:svg|jpg|jpeg|png|gif|ico|webp|avif|css|js|map|txt|xml|woff|woff2)$).*)",
   ],
 }

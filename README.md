@@ -55,7 +55,7 @@ See [docs/ai-cost-and-project-quotas.md](docs/ai-cost-and-project-quotas.md) for
 - Feature and workflow sections
 - Monthly and yearly pricing toggle
 - CTA and conversion-focused sections
-- Client-side navbar auth detection, so the public homepage does not block first paint on Supabase Auth
+- Client-side navbar auth detection, so the public homepage does not perform blocking Supabase Auth checks before first paint
 
 ### Authenticated Dashboard
 
@@ -85,7 +85,7 @@ See [docs/ai-cost-and-project-quotas.md](docs/ai-cost-and-project-quotas.md) for
 - OTP-first signup, password + OTP sign-in, and OTP-based password reset
 - Organization IAM with active-org scoping for project APIs
 - Atomic project quota enforcement, including Free lifetime creation credits
-- Middleware WAF, CSRF checks, security headers, and narrow route matching
+- Middleware WAF, CSRF checks, nonce-backed CSP/security headers, and centralized route policy
 - Redis-backed rate limits
 - Razorpay order creation, verification, and webhook reconciliation
 - Subscription expiry cron job
@@ -109,7 +109,7 @@ Browser
 ### Important Backend Patterns
 
 - Authenticated AI routes check the current user before model calls.
-- Public marketing pages should not perform server-side Supabase Auth checks before rendering. Keep `/` static, outside middleware, and let the navbar resolve auth client-side.
+- Public marketing pages should not perform server-side Supabase Auth checks before rendering. Middleware supplies request ids, WAF, CSRF, and CSP nonces for non-static pages, while the navbar resolves auth client-side.
 - Feature code is being migrated into `modules/*` with `domain`, `application`, `infrastructure`, and optional `ui` layers. `src/app/` should stay as the routing layer.
 - Effective plan is derived from subscription state, so expired or inactive subscriptions fall back safely.
 - AI endpoints apply both IP-based and per-user daily limits.
@@ -148,6 +148,8 @@ QSTASH_TOKEN=...
 QSTASH_CURRENT_SIGNING_KEY=...
 QSTASH_NEXT_SIGNING_KEY=...
 CRON_SECRET=...
+AUTH_OTP_SECRET=...
+MASTER_ADMIN_OTP_SECRET=...
 # Master Admin: comma-separated hosts that may serve /master-admin (e.g. admin.yourdomain.com,localhost:3000)
 ADMIN_HOSTS=localhost:3000
 # Master Admin fraud detection: HMAC secret for hash-only IP/device correlation
@@ -173,8 +175,7 @@ STORY_MEMORY_MAX_CONTEXT_TOKENS=3000
 AI_PROVIDER_MOCK=false
 MAX_TOKENS=8000
 SUPABASE_DATABASE_URL=...
-AUTH_OTP_SECRET=...
-MASTER_ADMIN_OTP_SECRET=...
+INTERNAL_API_SECRET=...
 REQUIRE_AAL2_FOR_MASTER_ADMIN=0
 REQUIRE_AAL2_FOR_IAM_ADMIN=0
 ALLOW_AI_WITHOUT_REDIS=1
@@ -341,7 +342,7 @@ Current top-level API groups:
 - `src/app/api/subscription`
 - `src/app/api/user`
 
-Internal async routes include `src/app/api/jobs/ai-batch` and `src/app/api/jobs/story-memory`. The project-scoped debug rebuild route is `src/app/api/projects/[id]/memory/rebuild`.
+Internal async routes include `src/app/api/jobs/ai-batch`, `src/app/api/jobs/story-memory`, and `src/app/api/jobs/razorpay-post-payment`. QStash signatures are preferred; `INTERNAL_API_SECRET` is available as an app-owned fallback for those job routes. The project-scoped debug rebuild route is `src/app/api/projects/[id]/memory/rebuild`.
 AI credit usage is exposed at `src/app/api/ai/credits`.
 
 ## Repository Structure
@@ -358,64 +359,48 @@ src/app/
   forgot-password/       Password reset request
   reset-password/        OTP-based password reset
 
-core/
+src/core/
   errors/                Shared application/HTTP error helpers
   http/                  JSON, cache, and validation helpers
   logger/                Cross-cutting logging wrapper
-
-modules/
-  account/               Profile domain schema, service, repository
-  ai/                    Generation service, routing policy, budget/cost domain
-  projects/              Project domain schema, service, repository, hook
-  story-memory/          LangChain embeddings, pgvector repository, indexing jobs
-
-src/shared/components/
-  auth/                  Auth forms and shells
-  master-admin/          Master Admin UI helpers
-  org/                   Organization switcher and member table
-  ui/                    Shared UI primitives
-  screenplay-editor.tsx  Editor rendering and export actions
-
-src/shared/hooks/
-  useRazorpay.ts
-  useScreenplayStream.ts
-  useUser.ts
+  security/              Middleware WAF, CSP, route policy, rate-limit helpers
 
 src/modules/
-  admin-privileges.ts   # Operator check (master_admin.users + service role)
-  admin-stats.ts
-  admin-host.ts         # ADMIN_HOSTS parsing for Master Admin
-  ai-costing.ts         # AI model pricing, AI credit budgets, and cost calculations
-  ai-router.ts          # Direct provider routing, fallback, streaming, and budget checks
-  ai-usage.ts           # Request usage logging and monthly budget rollups
-  ai-rate-limits.ts
-  ai-batch-jobs.ts
-  ai-prompt-cache.ts
-  ai-task-policy.ts
-  auth/                 # OTP, auth API, safe error, and sign-out helpers
-  email.ts
-  iam/                  # Active org, role, permission, MFA, and API guards
-  master-admin-audit.ts
-  master-admin-api-guard.ts
-  master-admin-csv.ts
-  master-admin-queries.ts
-  ratelimit.ts
-  security/             # Middleware WAF, API security, and WAF logging
-  screenplay-pdf.ts
-  screenplay-print-html.ts
-  subscription.ts
-  supabase/
+  account/               Profile domain schema, service, repository
+  ai/                    Generation service, routing policy, budget/cost domain, schemas
+  auth/                  OTP, auth API, safe error, and sign-out helpers
+  billing/               Razorpay, subscriptions, invoices, payment security
+  dashboard/             Dashboard application helpers
+  documents/             Document/story generation and storage flows
+  editor/                Editor domain, presentation hooks, PDF/print infrastructure
+  iam/                   Active org, roles, permissions, MFA, SCIM, API guards
+  marketing/             Public site sections
+  master-admin/          Operator auth, audit, CSV, queries, events
+  organizations/         Organization switching and membership helpers
+  projects/              Project domain schema, service, repository, hooks
+  story-bible/           Editable screenplay intelligence entries
+  story-memory/          LangChain embeddings, pgvector repository, indexing jobs
+
+src/infrastructure/
+  cache/                 Upstash Redis client
+  db/                    Supabase clients and generated database types
+  email/                 Resend email service and email theme
+  observability/         Sentry scrubbing
 
 docs/
   README.md
+  current-platform-handbook.md
   admin-operators.md
   ai-cost-and-project-quotas.md
   auth-and-billing-current-behavior.md
+  database-migrations.md
   enterprise-product-logic.md
+  gap-closure-roadmap.md
   iam-enterprise.md
   security-architecture.md
   performance-architecture.md
   supabase-auth-email-templates.md
+  system-architecture-rules.md
 
 supabase/
   database.sql
@@ -426,9 +411,10 @@ emails/
 infra/
   *.tf                   Terraform Cloudflare configuration
 
-types/
-  database.ts
-  project.ts
+tests/
+  security/              Security and product-invariant regression tests
+  e2e/                   Playwright smoke flows
+  evals/                 Offline deterministic AI eval fixtures
 ```
 
 ## Billing Notes
@@ -466,7 +452,7 @@ types/
 - Sign-in flow: `email + password -> OTP -> session`. Password verification happens first; the browser session is withheld until OTP succeeds.
 - Password reset flow: `email -> OTP -> new password`. It does not use Supabase PKCE recovery links.
 - Master Admin sign-in uses the same password + OTP shape, but the operator check and OTP challenge live in the isolated `master_admin` schema.
-- `AUTH_OTP_SECRET` and `MASTER_ADMIN_OTP_SECRET` are recommended for encrypting OTP payloads. They fall back to server-only keys when unset; production should set explicit secrets.
+- `AUTH_OTP_SECRET` and `MASTER_ADMIN_OTP_SECRET` encrypt OTP payloads and are required in production. Local development can fall back to server-only keys.
 - Supabase hosted **Confirm signup**, **Magic link**, and recovery-link emails are not used by the normal app auth flow.
 - The HTML files under `emails/` are legacy/reference templates only. The live business OTP emails are composed in code and sent through Resend.
 - For auth-sensitive server paths, prefer Supabase `getUser()` semantics over trusting `getSession()`.
@@ -474,13 +460,15 @@ types/
 ## Performance And Reliability Notes
 
 - Rate limits are enforced with Upstash Redis.
-- The public homepage is statically prerendered and intentionally excluded from the middleware matcher. Do not add blocking server auth calls to `/`; use client-side auth detection in the navbar for guest vs signed-in links.
-- `npm run build` was verified on May 4, 2026; see [docs/performance-architecture.md](docs/performance-architecture.md) for the current route-size baseline.
+- Middleware covers non-static pages and API routes so HTML can receive request ids and nonce-backed CSP. Static assets and Next internals are excluded.
+- Do not add blocking server auth calls to `/`; use client-side auth detection in the navbar for guest vs signed-in links.
+- `npm run build` was verified on May 6, 2026; see [docs/performance-architecture.md](docs/performance-architecture.md) for the current route-size baseline.
 - Screenplay streaming batches client updates and pauses autosave during generation to protect INP on long outputs.
 - The editor renders plain streaming text while generation is active, then resumes structured screenplay parsing after generation settles.
 - Database indexes in `supabase/database.sql` cover project pagination, admin date scans, subscription filters, email search, and Razorpay history.
 - `project_creation_usage` and `ai_usage_monthly` keep quota checks fast without scanning project or usage history on every request.
 - API routes set explicit cache headers.
+- Production API rate-limit infrastructure fails closed when Upstash Redis is missing or unreachable.
 - Motion-aware UI respects reduced-motion preferences.
 - CI currently runs lint, typecheck, critical `npm audit`, dependency review on PRs, Semgrep, CodeQL, and manual OWASP ZAP baseline scans.
 - The app includes error boundaries and defensive fallback handling around external services.
@@ -498,21 +486,24 @@ Recommended target: Vercel.
 - Configure direct AI provider keys (`OPENAI_API_KEY`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`).
 - Configure story memory env vars and ensure pgvector objects from `supabase/database.sql` are applied.
 - Configure QStash signing for `/api/jobs/story-memory` and `/api/jobs/ai-batch`, or set the direct worker fallback secrets intentionally.
+- Configure `INTERNAL_API_SECRET` only if app-owned background job callers need a shared-secret fallback.
 - Configure Razorpay webhook to `/api/razorpay/webhook` with both `payment.captured` and `subscription.*` events.
 - Configure Razorpay Subscription plan IDs: `RAZORPAY_PLAN_PRO_MONTHLY`, `RAZORPAY_PLAN_PRO_ANNUAL`, `RAZORPAY_PLAN_PREMIUM_MONTHLY`, and `RAZORPAY_PLAN_PREMIUM_ANNUAL`.
 - Configure and verify the Resend sender domain for auth OTPs, PDFs, and billing notifications.
 - Grant at least one row in `master_admin.users` before using admin routes.
 - Decide whether to enforce `REQUIRE_AAL2_FOR_MASTER_ADMIN` and `REQUIRE_AAL2_FOR_IAM_ADMIN` after operators/users enroll TOTP.
 - Confirm `CRON_SECRET` is present for cron endpoints.
+- Confirm `AUTH_OTP_SECRET` and `MASTER_ADMIN_OTP_SECRET` are present in production.
 - Keep Razorpay webhook, cron, authenticated HTML, and Master Admin responses uncached at any CDN layer.
 - Run `npm run build` before deployment.
 
 ## Known Documentation Notes
 
 - `CLAUDE.md` is maintainer guidance for code agents and has been aligned with the current stack.
-- `docs/README.md` is the index for architecture, operations, security, performance, IAM, and auth/billing docs.
+- `docs/README.md` is the managed documentation index and read order.
+- `docs/current-platform-handbook.md` is the merged current-state handbook for product, backend, security, billing, AI, data, and operations.
 - `docs/admin-operators.md` describes `master_admin.users`, `ADMIN_HOSTS`, and troubleshooting for admin surfaces.
-- `docs/auth-and-billing-current-behavior.md` is the source of truth for OTP auth, homepage auth rendering, Razorpay webhook writes, and plan billing behavior.
+- `docs/auth-and-billing-current-behavior.md` is the source of truth for OTP auth, Razorpay webhook writes, and plan billing behavior.
 - `docs/ai-cost-and-project-quotas.md` is the source of truth for GenerationService, story memory, AI routing, AI credits/top-ups, cost tracking, Free lifetime project credits, and project quota enforcement.
 - `docs/security-architecture.md` describes WAF, middleware, IAM, rate limits, and incident response.
 - `docs/iam-enterprise.md` describes organization IAM, tenant policy, MFA, SSO, SCIM, and permission checks.

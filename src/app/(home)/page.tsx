@@ -1,5 +1,6 @@
 import type { Metadata } from "next"
 import nextDynamic from "next/dynamic"
+import { headers } from "next/headers"
 import { Navbar } from "@/shared/components/navbar"
 import { ScrollProgress } from "@/shared/components/scroll-progress"
 import { FilmGrain } from "@/shared/components/film-grain"
@@ -166,14 +167,18 @@ const faqJsonLd = {
   })),
 }
 
-export default function HomePage() {
+export default async function HomePage() {
+  const nonce = (await headers()).get("x-nonce") ?? undefined
+
   return (
     <>
       <script
+        nonce={nonce}
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
       />
       <script
+        nonce={nonce}
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(faqJsonLd) }}
       />

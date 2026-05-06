@@ -7,6 +7,7 @@ import {
   razorpayPostPaymentJobSchema,
   type RazorpayPostPaymentJobPayload,
 } from "@/modules/billing/application/post-payment-job"
+import { requestHasInternalApiSecret } from "@/core/security/internal-api"
 import type { Database } from "@/infrastructure/db/types/database"
 
 export const dynamic = "force-dynamic"
@@ -33,6 +34,8 @@ function receiverFromEnv(): Receiver | null {
 }
 
 async function verifyQstashRequest(req: NextRequest, rawBody: string): Promise<boolean> {
+  if (requestHasInternalApiSecret(req)) return true
+
   const receiver = receiverFromEnv()
   const url = getRazorpayPostPaymentJobUrl()
   const signature = req.headers.get("upstash-signature")

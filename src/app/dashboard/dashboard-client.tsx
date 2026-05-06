@@ -20,8 +20,10 @@ import { Button } from "@/ui/components/button"
 import { Input } from "@/ui/components/input"
 import { ProjectCard } from "@/modules/projects/presentation/components/project-card"
 import { SubscriptionPanel } from "@/modules/billing/presentation/components/subscription-panel"
+import { useRazorpay } from "@/modules/billing/presentation/hooks/use-razorpay"
 import { EmptyProjects } from "@/modules/projects/presentation/components/empty-projects"
 import type { Subscription as UISubscription } from "@/shared/types/project"
+import { isUnlimitedProjectLimit } from "@/shared/types/project"
 import { mapDbProjectToUI } from "@/modules/projects/domain/mappers"
 import { toUISubscription } from "@/modules/billing/domain/subscription"
 import { CardSkeleton } from "@/shared/components/loading-skeleton"
@@ -90,6 +92,26 @@ export function DashboardClient({
   const [searchQuery, setSearchQuery] = useState("")
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false)
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid")
+  const [dashboardMessage, setDashboardMessage] = useState<string | null>(null)
+  const [paymentError, setPaymentError] = useState<string | null>(null)
+
+  const { initiateAiCreditTopupPayment } = useRazorpay({
+    onSuccess: (result) => {
+      if (result.purpose !== "ai_credit_topup") return
+      setPaymentError(null)
+      const amount = result.credits.toLocaleString("en-IN")
+      setDashboardMessage(
+        result.status === "applied"
+          ? `${amount} AI credits added to your account.`
+          : "Payment verified. Your AI credits will appear as soon as the webhook arrives."
+      )
+      router.refresh()
+    },
+    onError: (err) => {
+      setDashboardMessage(null)
+      setPaymentError(err)
+    },
+  })
 
   const projects = useMemo(() => dbProjects.map(mapDbProjectToUI), [dbProjects])
   const isLoading = projectsLoading
@@ -124,12 +146,14 @@ export function DashboardClient({
     )
 
     return {
-      totalProjects: projects.length,
+      totalProjects: quota?.activeUsed ?? projects.length,
       activeThisWeek,
       completionPct,
       slotsLeft: isFreePlan && quota
-        ? Math.max(0, quota.freeLifetimeLimit - quota.freeLifetimeUsed)
-        : Math.max(0, subscription.projectsLimit - subscription.projectsUsed),
+        ? String(Math.max(0, quota.freeLifetimeLimit - quota.freeLifetimeUsed))
+        : isUnlimitedProjectLimit(subscription.projectsLimit)
+          ? "Unlimited"
+          : String(Math.max(0, subscription.projectsLimit - subscription.projectsUsed)),
     }
   }, [isFreePlan, projects, quota, subscription.projectsLimit, subscription.projectsUsed])
 
@@ -152,11 +176,7 @@ export function DashboardClient({
         alert(quotaBlockedReason)
         return
       }
-      try {
-        await createProject(title, description)
-      } catch {
-        /* error surfaced via projectsError */
-      }
+      await createProject(title, description)
     },
     [canCreateProject, createProject, quotaBlockedReason]
   )
@@ -248,7 +268,7 @@ export function DashboardClient({
                     aria-hidden
                   />
                   <Input
-                    placeholder="Search projects..."
+                    placeholder={hasMore ? "Search loaded projects..." : "Search projects..."}
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     aria-label="Search projects"
@@ -306,6 +326,16 @@ export function DashboardClient({
         </header>
 
         <div className="px-4 py-4 pb-8 sm:p-6 sm:pb-10">
+          {dashboardMessage && (
+            <div className="mb-6 rounded-xl border border-green-500/30 bg-green-500/10 px-4 py-3 text-sm text-green-300">
+              {dashboardMessage}
+            </div>
+          )}
+          {paymentError && (
+            <div className="mb-6 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+              {paymentError}
+            </div>
+          )}
           {projectsError && (
             <div
               className="mb-6 rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"
@@ -491,6 +521,7 @@ export function DashboardClient({
                     subscription={subscription}
                     projectQuota={quota}
                     onUpgrade={goToSubscription}
+                    onBuyAiCredits={initiateAiCreditTopupPayment}
                   />
                 </motion.div>
 

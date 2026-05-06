@@ -12,6 +12,7 @@ import { generateTextWithService } from "@/modules/ai/application/generation-ser
 import { aiRouteErrorResponse } from "@/modules/ai/infrastructure/provider-router"
 import { aiBudgetHeaders } from "@/modules/ai/application/usage-service"
 import { resolveAiTaskPolicy } from "@/modules/ai/domain/task-policy"
+import { shotSuggestionsArraySchema } from "@/modules/ai/domain/schemas"
 import { loadProjectForAiContext } from "@/modules/story-memory/application/project-context"
 import { fallbackContextForProject } from "@/modules/story-memory/application/story-memory-service"
 
@@ -113,13 +114,13 @@ JSON வடிவத்தில் மட்டும் பதிலளிக�
     })
     const text = result.text
 
-    let shots
+    let rawShots: unknown
     try {
       const jsonMatch = text.match(/\[[\s\S]*\]/)
       if (jsonMatch) {
-        shots = JSON.parse(jsonMatch[0])
+        rawShots = JSON.parse(jsonMatch[0])
       } else {
-        shots = JSON.parse(text)
+        rawShots = JSON.parse(text)
       }
     } catch {
       return NextResponse.json(
@@ -128,8 +129,16 @@ JSON வடிவத்தில் மட்டும் பதிலளிக�
       )
     }
 
+    const parsedShots = shotSuggestionsArraySchema.safeParse(rawShots)
+    if (!parsedShots.success) {
+      return NextResponse.json(
+        { error: "Shot suggestions response was invalid. Please try again." },
+        { status: 500 }
+      )
+    }
+
     return NextResponse.json(
-      { shots },
+      { shots: parsedShots.data },
       {
         headers: {
           ...aiBudgetHeaders(result.budget),

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { z } from "zod"
 import { createAdminClient } from "@/infrastructure/db/supabase/admin"
 import { scimUserResponse, validateScimBearer } from "@/modules/iam/application/scim"
+import { scimLimitOr429 } from "@/core/security/api-ip-limit"
 
 export const dynamic = "force-dynamic"
 
@@ -81,6 +82,9 @@ export async function GET(
   const parsedParams = paramsSchema.safeParse(await params)
   if (!parsedParams.success) return NextResponse.json({ detail: "Invalid SCIM id" }, { status: 400 })
 
+  const tooMany = await scimLimitOr429(req, parsedParams.data.orgId)
+  if (tooMany) return tooMany
+
   const admin = createAdminClient()
   const auth = await validateScimBearer(admin as any, parsedParams.data.orgId, req.headers.get("authorization"))
   if (!auth.ok) return NextResponse.json({ detail: auth.error }, { status: auth.status })
@@ -102,6 +106,9 @@ export async function PATCH(
 ) {
   const parsedParams = paramsSchema.safeParse(await params)
   if (!parsedParams.success) return NextResponse.json({ detail: "Invalid SCIM id" }, { status: 400 })
+
+  const tooMany = await scimLimitOr429(req, parsedParams.data.orgId)
+  if (tooMany) return tooMany
 
   const admin = createAdminClient()
   const auth = await validateScimBearer(admin as any, parsedParams.data.orgId, req.headers.get("authorization"))
@@ -135,6 +142,9 @@ export async function DELETE(
 ) {
   const parsedParams = paramsSchema.safeParse(await params)
   if (!parsedParams.success) return NextResponse.json({ detail: "Invalid SCIM id" }, { status: 400 })
+
+  const tooMany = await scimLimitOr429(req, parsedParams.data.orgId)
+  if (tooMany) return tooMany
 
   const admin = createAdminClient()
   const auth = await validateScimBearer(admin as any, parsedParams.data.orgId, req.headers.get("authorization"))

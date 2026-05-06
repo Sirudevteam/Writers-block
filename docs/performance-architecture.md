@@ -1,34 +1,36 @@
 # Performance Architecture
 
-**Last updated:** May 5, 2026
+**Last updated:** May 6, 2026
 **Scope:** Next.js rendering, middleware, API latency, database access, caching, and editor runtime behavior.
 
-## Current Baseline
+## Current Build Baseline
 
-Latest production build check, verified on May 4, 2026:
+Latest local production build check:
 
 ```bash
 npm run build
 ```
 
-Observed route sizes:
+Verified on May 6, 2026.
 
-| Route | First Load JS |
-|---|---:|
-| `/` | 264 kB |
-| `/dashboard` | 277 kB |
-| `/dashboard/org` | 225 kB |
-| `/dashboard/projects` | 331 kB |
-| `/dashboard/settings` | 294 kB |
-| `/dashboard/subscription` | 298 kB |
-| `/editor` | 354 kB |
-| `/master-admin` | 225 kB |
-| `/master-admin/ai-cost` | 187 kB |
-| `/signin` | 202 kB |
-| `/signup` | 203 kB |
-| `/verify-code` | 202 kB |
+| Route | Rendering | First Load JS |
+|---|---|---:|
+| `/` | dynamic | 265 kB |
+| `/dashboard` | dynamic | 278 kB |
+| `/dashboard/org` | dynamic | 225 kB |
+| `/dashboard/projects` | dynamic | 333 kB |
+| `/dashboard/settings` | dynamic | 295 kB |
+| `/dashboard/subscription` | dynamic | 300 kB |
+| `/editor` | dynamic | 384 kB |
+| `/master-admin` | dynamic | 226 kB |
+| `/master-admin/ai-cost` | dynamic | 187 kB |
+| `/signin` | dynamic | 203 kB |
+| `/signup` | dynamic | 203 kB |
+| `/verify-code` | dynamic | 203 kB |
 
-Shared first-load JS is 184 kB. Middleware bundle size is 152 kB, but the matcher intentionally excludes `/` so the static public homepage does not pay middleware, WAF, or Supabase auth overhead on first request.
+Shared first-load JS is 185 kB. Middleware bundle size is 153 kB.
+
+The homepage is dynamic because it receives a request nonce for CSP-protected JSON-LD scripts. It must still avoid server-side Supabase Auth checks and other blocking product queries before render.
 
 ## Performance Targets
 
@@ -37,21 +39,32 @@ Shared first-load JS is 184 kB. Middleware bundle size is 152 kB, but the matche
 | LCP | < 2.5s |
 | CLS | < 0.1 |
 | INP | < 200ms |
-| TTFB | < 500ms |
+| TTFB | < 500ms for protected/product pages; monitor `/` after nonce-CSP rollout |
+
+## Middleware Cost
+
+Middleware covers non-static pages and API routes to provide:
+
+- request id
+- nonce-backed CSP
+- WAF inspection
+- CSRF checks
+- Supabase session refresh
+- route policy gates
+- Master Admin/account-status gates
+
+Static assets, Next internals, image files, maps, fonts, `robots.txt`, and `sitemap.xml` are excluded. Keep those exclusions intact.
+
+Do not add server-side Supabase Auth checks to public marketing Server Components. The navbar should continue resolving auth client-side.
 
 ## Implemented Optimizations
-
-### Static Homepage TTFB
-
-The public homepage is statically prerendered and is not included in the middleware matcher.
-
-Do not add `/` back to `middleware.ts` unless the public page truly needs request-time auth or WAF behavior. Security headers for public pages are applied by `next.config.js`.
 
 ### Streaming Editor Runtime
 
 AI screenplay streaming is batched in `src/modules/editor/presentation/hooks/use-screenplay-stream.ts` with `requestAnimationFrame`. This prevents per-token or per-chunk React updates from forcing repeated full editor re-renders.
 
 While generation is active:
+
 - autosave is disabled through `useAutoSave({ enabled: !isGenerating })`
 - the editor renders plain streaming text
 - screenplay parsing resumes after generation settles
@@ -77,7 +90,7 @@ When adding a new high-cardinality filter, add the matching index in `supabase/d
 
 Mutation and sensitive routes return `no-store`. Read routes that are user-specific but cacheable use private cache headers, for example project list and subscription reads.
 
-Master Admin reporting APIs still return `private, no-store`, but expensive overview/usage/funnel payloads are cached server-side in Upstash Redis for 30 seconds after operator authorization.
+Master Admin reporting APIs return `private, no-store`, but expensive overview/usage/funnel payloads are cached server-side in Upstash Redis for 30 seconds after operator authorization.
 
 ### Dashboard First Load
 
@@ -91,56 +104,41 @@ AI routes read `ai_usage_monthly` before provider calls. This avoids summing `us
 
 AI prompt cache metadata is stored in `ai_prompt_cache_entries`; cache hit/miss accounting stays in `usage_logs`.
 
-Non-real-time AI batch jobs are queued in `ai_batch_jobs` and processed through QStash-style job routes instead of running synchronously in the user request.
+Non-real-time AI batch jobs are queued in `ai_batch_jobs` and processed through signed job routes instead of running synchronously in the user request.
 
-Story memory indexing is also async. Project saves queue `project_memory_status` work when the screenplay content hash changes, and `/api/jobs/story-memory` rebuilds pgvector chunks outside the user-facing save/generation path. AI generation reads only relevant memory chunks, capped by `STORY_MEMORY_MAX_CONTEXT_TOKENS`, and falls back to project fields plus the recent screenplay tail when memory is empty or unavailable.
-
-`usage_logs` remains the request-level audit table. If write volume becomes a bottleneck, move `recordAiUsage(...)` to a queue or batch worker, but keep `ai_usage_monthly` fresh enough for budget enforcement.
+Story memory indexing is async. Project saves queue `project_memory_status` work when the screenplay content hash changes, and `/api/jobs/story-memory` rebuilds pgvector chunks outside the user-facing save/generation path. AI generation reads only relevant memory chunks, capped by `STORY_MEMORY_MAX_CONTEXT_TOKENS`, and falls back to project fields plus the recent screenplay tail when memory is empty or unavailable.
 
 ### Razorpay Webhook Critical Path
 
-The Razorpay webhook validates events and applies critical billing state synchronously. Recurring paid plans are driven by Razorpay `subscription.*` webhooks into `subscriptions`, `billing_subscription_ledger`, and `billing_invoices`. One-time clean PDF purchases still write `pdf_export_purchases`, and AI credit top-ups still use the top-up payment RPC. Legacy one-time subscription payment side effects still use `master_admin.payment_post_process_jobs` where that path is exercised.
+The Razorpay webhook validates events and applies critical billing state synchronously. Recurring paid plans are driven by Razorpay `subscription.*` webhooks into `subscriptions`, `billing_subscription_ledger`, and `billing_invoices`. One-time clean PDF purchases still write `pdf_export_purchases`, and AI credit top-ups still use the top-up payment RPC.
 
-### Security Scanning And Build Gates
-
-CI runs lint, typecheck, critical `npm audit`, dependency review on PRs, Semgrep SAST, CodeQL, and a manually triggered OWASP ZAP baseline scan. Keep these checks green before relying on local performance numbers.
+Post-payment side effects that are not entitlement-critical can run through `/api/jobs/razorpay-post-payment`.
 
 ## Current Bottlenecks
 
-### Bundle Size
+The largest user-facing bundles are:
 
-The largest user-facing bundles remain:
-- `/editor`: 354 kB first-load JS
-- `/dashboard/projects`: 331 kB first-load JS
-- `/`: 264 kB first-load JS
+- `/editor`: 384 kB first-load JS
+- `/dashboard/projects`: 333 kB first-load JS
+- `/dashboard/subscription`: 300 kB first-load JS
+- `/dashboard/settings`: 295 kB first-load JS
+- `/`: 265 kB first-load JS
 
 Primary causes:
+
 - global root client providers
 - `framer-motion` on above-the-fold marketing and app pages
 - large editor UI surface in a single client page
 - multiple font families in the root layout
+- middleware nonce-CSP makes the homepage dynamic
 
 Recommended next tranche:
+
 1. Split editor side panels and reference panels with `next/dynamic`.
 2. Move non-critical marketing animations to CSS or lazy client islands.
 3. Keep only critical fonts in the root layout; move secondary fonts to route-specific use where possible.
 4. Add bundle analyzer support before major UI work.
-
-### Middleware Size
-
-Middleware is still large because it contains WAF, auth, Master Admin gates, CSRF checks, and audit hooks.
-
-Keep the matcher narrow:
-- protected app routes
-- auth pages that need redirect behavior
-- Master Admin routes
-- API routes
-
-Avoid matching static marketing pages unless there is a concrete security requirement.
-
-### Admin Analytics
-
-Master Admin daily buckets, endpoint breakdowns, top users, funnel counts, MRR groups, and AI Cost summaries are aggregated from indexed tables or SQL RPCs instead of sampling large row sets into application memory. At larger scale, move these RPCs behind rollup tables or materialized views.
+5. Track homepage TTFB after nonce-CSP rollout and remove avoidable server work from `/`.
 
 ## Measurement Workflow
 
@@ -160,7 +158,7 @@ npx lighthouse http://localhost:3000/editor --preset=desktop --view
 
 Bundle inspection:
 
-```bash
+```powershell
 npm run build
 Get-ChildItem -Recurse .next/static/chunks -File |
   Sort-Object Length -Descending |
@@ -169,8 +167,8 @@ Get-ChildItem -Recurse .next/static/chunks -File |
 
 ## Performance Checklist
 
-- Keep `/` static and outside middleware.
-- Do not call Supabase auth from public marketing Server Components.
+- Keep middleware static-asset exclusions intact.
+- Do not call Supabase Auth from public marketing Server Components.
 - Batch SSE/client stream updates before setting React state.
 - Do not autosave every stream chunk.
 - Use cursor pagination for growing lists.

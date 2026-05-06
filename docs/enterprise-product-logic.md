@@ -1,5 +1,7 @@
 # Enterprise Product Logic
 
+**Last updated:** May 6, 2026
+
 Implemented scope:
 
 - Organization invites with hashed tokens, resend/revoke/accept, expiry, and audit events.
@@ -21,4 +23,6 @@ Operational notes:
 - Configure Razorpay subscription plan IDs with `RAZORPAY_PLAN_PRO_MONTHLY`, `RAZORPAY_PLAN_PRO_ANNUAL`, `RAZORPAY_PLAN_PREMIUM_MONTHLY`, and `RAZORPAY_PLAN_PREMIUM_ANNUAL`.
 - Razorpay subscription webhooks must include `subscription.*` events in addition to the existing `payment.captured` event.
 - SCIM tokens are only shown once when rotating through `PATCH /api/org/security-policy` with `rotateScimToken: true`.
+- SCIM routes are machine-authenticated and rate-limited per organization/client IP before token validation.
 - `GET /api/cron/cleanup-enterprise` should run on a trusted schedule with `CRON_SECRET`.
+- App-owned background job callers can use `INTERNAL_API_SECRET` only where QStash or route-specific job secrets are not available.

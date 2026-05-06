@@ -15,6 +15,7 @@ interface UseScreenplayStreamReturn {
   generatedText: string
   isGenerating: boolean
   isSaving: boolean
+  lastAiRequestId: string | null
   savedProjectId: string | null
   error: string | null
   saveStatus: SaveStatus
@@ -37,6 +38,7 @@ export function useScreenplayStream(loadedProjectId: string | null = null): UseS
   const [isGenerating, setIsGenerating] = useState(false)
   const [savedProjectId, setSavedProjectId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [lastAiRequestId, setLastAiRequestId] = useState<string | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
   const fullTextRef = useRef("")
   const lastConfigRef = useRef<SceneConfig | null>(null)
@@ -181,6 +183,7 @@ export function useScreenplayStream(loadedProjectId: string | null = null): UseS
     async (config: SceneConfig) => {
       setGeneratedText("")
       setError(null)
+      setLastAiRequestId(null)
       setIsGenerating(true)
       savedProjectIdRef.current = loadedProjectId
       setSavedProjectId(loadedProjectId)
@@ -206,6 +209,8 @@ export function useScreenplayStream(loadedProjectId: string | null = null): UseS
           const errorData = await response.json()
           throw new Error(errorData.error || "Failed to generate screenplay")
         }
+
+        setLastAiRequestId(response.headers.get("X-AI-Request-Id"))
 
         const reader = response.body?.getReader()
         const decoder = new TextDecoder()
@@ -271,6 +276,7 @@ export function useScreenplayStream(loadedProjectId: string | null = null): UseS
     }
     setGeneratedText("")
     setError(null)
+    setLastAiRequestId(null)
     savedProjectIdRef.current = null
     setSavedProjectId(null)
     fullTextRef.current = ""
@@ -279,6 +285,7 @@ export function useScreenplayStream(loadedProjectId: string | null = null): UseS
 
   const setGeneratedTextWrapper = useCallback((text: string) => {
     setGeneratedText(text)
+    setLastAiRequestId(null)
     fullTextRef.current = text
   }, [])
 
@@ -299,6 +306,7 @@ export function useScreenplayStream(loadedProjectId: string | null = null): UseS
     generatedText,
     isGenerating,
     isSaving: saveStatus === "saving",
+    lastAiRequestId,
     savedProjectId,
     error,
     saveStatus,

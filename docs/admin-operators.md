@@ -1,6 +1,6 @@
 # Admin operators (`master_admin.users`)
 
-**Last updated:** May 4, 2026
+**Last updated:** May 6, 2026
 
 Platform admin access is **not** controlled by an email allowlist in environment variables. Operators are rows in **`master_admin.users`**, keyed by **`auth.users.id`**.
 

@@ -7,6 +7,8 @@ import {
   getPaymentOrderRatelimit,
   getPaymentVerifyRatelimit,
   getPdfExportRatelimit,
+  getScimRatelimit,
+  getSupportTicketRatelimit,
 } from "@/core/security/rate-limit"
 
 let loggedDevRedisHint = false
@@ -53,12 +55,27 @@ async function limitOr429(
   )
 }
 
+function isProductionRuntime(): boolean {
+  return process.env.VERCEL_ENV === "production" || process.env.NODE_ENV === "production"
+}
+
+function serviceUnavailableResponse(): NextResponse {
+  return NextResponse.json(
+    { error: "Service temporarily unavailable: rate limiting is unavailable." },
+    { status: 503, headers: { "Cache-Control": "no-store" } }
+  )
+}
+
 function handleRatelimitError(e: unknown): NextResponse | null {
   const msg = e instanceof Error ? e.message : String(e)
   if (msg.includes("Dynamic server usage") || msg.includes("Could not read")) {
     throw e
   }
-  console.warn("[api-ip-limit] Upstash Redis unreachable - allowing request (fail-open):", msg)
+  if (isProductionRuntime()) {
+    console.error("[api-ip-limit] Upstash Redis unreachable - blocking request (fail-closed):", msg)
+    return serviceUnavailableResponse()
+  }
+  console.warn("[api-ip-limit] Upstash Redis unreachable - allowing request in non-production:", msg)
   if (process.env.NODE_ENV !== "production" && !loggedDevRedisHint) {
     loggedDevRedisHint = true
     console.warn(
@@ -71,7 +88,7 @@ function handleRatelimitError(e: unknown): NextResponse | null {
 /**
  * 100 req/min per IP (when Redis is configured). First line of defense on hot API routes.
  * Returns 429 or null if OK.
- * On Upstash/Redis network errors, fails open so a bad Redis config does not 500 the whole API.
+ * In production, Upstash/Redis network errors fail closed.
  */
 export async function apiIpLimitOr429(req: NextRequest): Promise<NextResponse | null> {
   try {
@@ -131,6 +148,26 @@ export async function aiBatchLimitOr429(
 ): Promise<NextResponse | null> {
   try {
     return limitOr429(getAiBatchRatelimit() as unknown as LimitClient, scopedKey(req, "ai-batch", userId))
+  } catch (e) {
+    return handleRatelimitError(e)
+  }
+}
+
+export async function scimLimitOr429(
+  req: NextRequest,
+  orgId: string
+): Promise<NextResponse | null> {
+  try {
+    const safeOrgId = orgId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 64)
+    return limitOr429(getScimRatelimit() as unknown as LimitClient, scopedKey(req, `scim:${safeOrgId}`))
+  } catch (e) {
+    return handleRatelimitError(e)
+  }
+}
+
+export async function supportTicketLimitOr429(req: NextRequest): Promise<NextResponse | null> {
+  try {
+    return limitOr429(getSupportTicketRatelimit() as unknown as LimitClient, scopedKey(req, "support-ticket"))
   } catch (e) {
     return handleRatelimitError(e)
   }
