@@ -5,6 +5,8 @@ node_modules
 
 # Testing
 /coverage
+/test-results/
+/playwright-report/
 
 # Next.js
 /.next/
@@ -34,3 +36,10 @@ yarn-error.log*
 # OS
 .DS_Store
 Thumbs.db
+
+# Terraform
+infra/.terraform/
+infra/*.tfstate
+infra/*.tfstate.backup
+infra/.terraform.lock.hcl
+infra/*.tfvars

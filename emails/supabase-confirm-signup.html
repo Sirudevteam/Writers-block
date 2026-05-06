@@ -1,19 +1,21 @@
 <!--
-  Supabase Dashboard → Authentication → Email Templates → Confirm signup
+  Supabase Dashboard -> Authentication -> Email Templates -> Confirm signup
 
-  Suggested subject: Confirm your email — Writers Block
+  Suggested subject: Your Writers Block signup code
 
   Paste the entire contents below (from <!DOCTYPE through </html>) into the template body.
+
+  This template is intentionally OTP-only. Do not add a button/link unless you are intentionally returning to link-based signup.
 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width" />
-  <title>Confirm your email</title>
+  <title>Your signup code</title>
 </head>
 <body style="margin:0; padding:0; background:#060605; -webkit-text-size-adjust:100%;">
-  <div style="display:none; max-height:0; overflow:hidden; mso-hide:all;">Verify your Writers Block account to start writing.</div>
+  <div style="display:none; max-height:0; overflow:hidden; mso-hide:all;">Use this 6-digit code to finish creating your Writers Block account.</div>
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#060605;">
     <tr>
       <td align="center" style="padding:32px 16px 48px 16px;">
@@ -26,29 +28,25 @@
           </tr>
           <tr>
             <td style="padding:28px 28px 8px 28px; color:#e8e8e6; font-family:system-ui,Segoe UI,Helvetica,Arial,sans-serif; font-size:15px; line-height:1.6;">
-              <h1 style="margin:0 0 16px 0; font-size:22px; font-weight:700; line-height:1.25; color:#ffffff;">Confirm your email</h1>
-              <p style="margin:0 0 12px 0;">You&apos;re almost there. We received a request to create a <strong style="color:#ffffff;">Writers Block</strong> account for:</p>
+              <h1 style="margin:0 0 16px 0; font-size:22px; font-weight:700; line-height:1.25; color:#ffffff;">Your signup code</h1>
+              <p style="margin:0 0 12px 0;">We received a request to create a <strong style="color:#ffffff;">Writers Block</strong> account for:</p>
               <p style="margin:0 0 20px 0; font-size:14px; color:#00d4ff; word-break:break-all;">{{ .Email }}</p>
-              <p style="margin:0; color:rgba(255,255,255,0.7);">Tap the button below to verify your email and finish signing up. This link expires after a short time for your security.</p>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding:8px 28px 28px 28px;">
-              <table role="presentation" cellspacing="0" cellpadding="0" border="0">
-                <tr>
-                  <td style="border-radius:12px; background:linear-gradient(135deg, #ff6b35 0%, #c94a20 100%);">
-                    <a href="{{ .ConfirmationURL }}" style="display:inline-block; padding:14px 28px; font-size:15px; font-weight:700; color:#0a0a0a; text-decoration:none; font-family:system-ui,Segoe UI,Helvetica,Arial,sans-serif; border-radius:12px;">Verify email &amp; continue</a>
-                  </td>
-                </tr>
-              </table>
+              <p style="margin:0 0 16px 0; color:rgba(255,255,255,0.7);">Enter this 6-digit code in Writers Block. It works across browsers and devices.</p>
             </td>
           </tr>
           <tr>
             <td style="padding:0 28px 28px 28px;">
-              <p style="margin:0 0 10px 0; font-size:12px; line-height:1.5; color:rgba(255,255,255,0.55);">If the button doesn&apos;t work, copy and paste this URL into your browser:</p>
-              <p style="margin:0 0 12px 0; font-size:11px; line-height:1.4; word-break:break-all; color:rgba(255,255,255,0.38);">{{ .ConfirmationURL }}</p>
-              <p style="margin:0 0 8px 0; font-size:12px; line-height:1.5; color:rgba(255,255,255,0.38);">If you didn&apos;t create an account, you can ignore this email.</p>
-              <p style="margin:0; font-size:12px; color:rgba(255,255,255,0.55);">&mdash; The Writers Block team</p>
+              <div style="border-radius:16px; border:1px solid rgba(255,107,53,0.28); background:linear-gradient(135deg, rgba(255,107,53,0.15) 0%, rgba(0,212,255,0.08) 100%); padding:20px 16px; text-align:center;">
+                <p style="margin:0 0 10px 0; font-size:11px; text-transform:uppercase; letter-spacing:0.18em; color:rgba(255,255,255,0.5); font-family:ui-monospace,monospace;">Signup code</p>
+                <p style="margin:0; font-size:34px; line-height:1; font-weight:800; letter-spacing:0.32em; color:#ffffff; font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;">{{ .Token }}</p>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 28px 28px 28px;">
+              <p style="margin:0 0 10px 0; font-size:12px; line-height:1.5; color:rgba(255,255,255,0.55);">Open Writers Block and enter the newest code you received. If you requested multiple codes, only the latest one should be used.</p>
+              <p style="margin:0 0 8px 0; font-size:12px; line-height:1.5; color:rgba(255,255,255,0.38);">If you did not create an account, you can ignore this email.</p>
+              <p style="margin:0; font-size:12px; color:rgba(255,255,255,0.55);">- The Writers Block team</p>
             </td>
           </tr>
           <tr>

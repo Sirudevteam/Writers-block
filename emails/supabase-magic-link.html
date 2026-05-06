@@ -1,16 +1,19 @@
 <!--
-  Supabase → Email Templates → Magic link
-  Suggested subject: Your sign-in link — Writers Block
+  Supabase Dashboard -> Authentication -> Email Templates -> Magic link
+  Suggested subject: Your sign-in code - Writers Block
+
+  Writers Block uses password + email OTP for sign-in. This template is
+  intentionally OTP-only. Do not add a button/link unless you are intentionally returning to magic-link signin.
 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width" />
-  <title>Sign in to Writers Block</title>
+  <title>Your sign-in code</title>
 </head>
 <body style="margin:0; padding:0; background:#060605; -webkit-text-size-adjust:100%;">
-  <div style="display:none; max-height:0; overflow:hidden; mso-hide:all;">Use this link to sign in to Writers Block.</div>
+  <div style="display:none; max-height:0; overflow:hidden; mso-hide:all;">Use this 6-digit code to sign in to Writers Block.</div>
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#060605;">
     <tr>
       <td align="center" style="padding:32px 16px 48px 16px;">
@@ -23,20 +26,18 @@
           </tr>
           <tr>
             <td style="padding:28px 28px 8px 28px; color:#e8e8e6; font-family:system-ui,Segoe UI,Helvetica,Arial,sans-serif; font-size:15px; line-height:1.6;">
-              <h1 style="margin:0 0 16px 0; font-size:22px; font-weight:700; color:#ffffff;">Your sign-in link</h1>
-              <p style="margin:0 0 16px 0;">Click the button below to sign in to <strong style="color:#ffffff;">Writers Block</strong> as <span style="color:#00d4ff; word-break:break-all;">{{ .Email }}</span>.</p>
-              <p style="margin:0; color:rgba(255,255,255,0.55); font-size:14px;">This link expires soon. If you didn&apos;t request it, you can ignore this email.</p>
+              <h1 style="margin:0 0 16px 0; font-size:22px; font-weight:700; color:#ffffff;">Your sign-in code</h1>
+              <p style="margin:0 0 12px 0;">Use this code to finish signing in to <strong style="color:#ffffff;">Writers Block</strong> as:</p>
+              <p style="margin:0 0 20px 0; font-size:14px; color:#00d4ff; word-break:break-all;">{{ .Email }}</p>
+              <p style="margin:0; color:rgba(255,255,255,0.55); font-size:14px;">This code expires soon. If you didn&apos;t request it, you can ignore this email.</p>
             </td>
           </tr>
           <tr>
-            <td style="padding:8px 28px 28px 28px;">
-              <table role="presentation" cellspacing="0" cellpadding="0" border="0">
-                <tr>
-                  <td style="border-radius:12px; background:linear-gradient(135deg, #ff6b35 0%, #c94a20 100%);">
-                    <a href="{{ .ConfirmationURL }}" style="display:inline-block; padding:14px 28px; font-size:15px; font-weight:700; color:#0a0a0a; text-decoration:none; font-family:system-ui,Segoe UI,Helvetica,Arial,sans-serif; border-radius:12px;">Sign in</a>
-                  </td>
-                </tr>
-              </table>
+            <td style="padding:0 28px 28px 28px;">
+              <div style="border-radius:16px; border:1px solid rgba(255,107,53,0.28); background:linear-gradient(135deg, rgba(255,107,53,0.15) 0%, rgba(0,212,255,0.08) 100%); padding:20px 16px; text-align:center;">
+                <p style="margin:0 0 10px 0; font-size:11px; text-transform:uppercase; letter-spacing:0.18em; color:rgba(255,255,255,0.5); font-family:ui-monospace,monospace;">Sign-in code</p>
+                <p style="margin:0; font-size:34px; line-height:1; font-weight:800; letter-spacing:0.32em; color:#ffffff; font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;">{{ .Token }}</p>
+              </div>
             </td>
           </tr>
           <tr>
