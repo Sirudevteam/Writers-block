@@ -7,6 +7,17 @@ on:
     branches: [main, master]
 
 jobs:
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependency Review
+        uses: actions/dependency-review-action@v4
+
   quality:
     runs-on: ubuntu-latest
     steps:

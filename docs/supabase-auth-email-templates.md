@@ -1,49 +1,65 @@
-# Supabase auth email templates (Writers Block)
+# Auth OTP Email Ownership
 
-Sign-up and password emails are **sent by Supabase Auth**, not by the Next.js app. The app only sets `emailRedirectTo` in [`lib/auth/actions.ts`](../lib/auth/actions.ts) so the confirmation link returns users to [`/auth/callback`](../app/auth/callback/route.ts).
+**Last updated:** May 6, 2026
 
-This guide explains how to apply the **Writers Block** dark / cinematic-styled HTML from [`emails/`](../emails/) in the Supabase Dashboard.
+Writers Block no longer uses Supabase hosted auth email templates for the core signup/signin OTP flow.
 
-**Official reference:** [Supabase — Email templates](https://supabase.com/docs/guides/auth/auth-email-templates) (Go template variables such as `{{ .ConfirmationURL }}`, `{{ .Email }}`, `{{ .SiteURL }}`).
+The business rule is:
+- Writers Block creates and stores short-lived OTP challenges in `user_auth.otp_challenges`.
+- Writers Block sends signup/signin/password-reset codes through `src/infrastructure/email/email-service.ts` using Resend.
+- Master Admin OTP challenges are stored separately in `master_admin.otp_challenges`.
+- Supabase Auth remains the identity and session provider only.
+- Supabase **Confirm signup**, **Magic link**, and recovery-link emails should not be part of normal app auth.
 
-## 1. Open email templates
+This avoids the product confusion where Supabase sends an email named "Confirm signup" or "Magic link" while the app expects a code-entry workflow.
 
-1. Go to [Supabase Dashboard](https://supabase.com/dashboard) → your project.
-2. **Authentication** → **Email** (or **Email Templates** depending on UI version).
-3. For each flow below, open the matching template, set the **Subject**, and paste the **entire** HTML from the file (from `<!DOCTYPE html>` through `</html>`).
+## Current Flow
 
-| Template in Supabase | Suggested subject | File in this repo |
-|---------------------|-------------------|-------------------|
-| Confirm signup | `Confirm your email — Writers Block` | [`emails/supabase-confirm-signup.html`](../emails/supabase-confirm-signup.html) |
-| Magic link | `Your sign-in link — Writers Block` | [`emails/supabase-magic-link.html`](../emails/supabase-magic-link.html) |
-| Reset password | `Reset your password — Writers Block` | [`emails/supabase-reset-password.html`](../emails/supabase-reset-password.html) |
-| Change email address | `Confirm your new email — Writers Block` | [`emails/supabase-change-email.html`](../emails/supabase-change-email.html) |
+Signup:
+1. `/api/auth/sign-up` validates name, email, password, and consent.
+2. The server creates a Supabase user with `admin.createUser(...)`.
+3. The server creates an app-owned `signup` OTP challenge.
+4. The server sends `Your Writers Block signup code` with `sendAuthOtpEmail(...)`.
+5. `/api/auth/verify-code` consumes the OTP and confirms the Supabase email.
+6. The user returns to `/signin`; session cookies are created only after the normal password + sign-in OTP flow.
 
-If a variable (e.g. for email change) does not work in a template, check the [current Supabase list](https://supabase.com/docs/guides/auth/auth-email-templates) and adjust the HTML accordingly. The dashboard’s template preview will show errors.
+Signin:
+1. `/api/auth/sign-in` validates the password using Supabase.
+2. The server withholds session cookies.
+3. The server creates an app-owned `signin` OTP challenge with the encrypted session payload.
+4. The server sends `Your Writers Block sign-in code` with `sendAuthOtpEmail(...)`.
+5. `/api/auth/verify-code?mode=signin` consumes the OTP and sets HTTP-only cookies.
 
-## 2. URL configuration (required for links to work)
+Password reset:
+1. `/api/auth/request-password-reset` validates the email.
+2. The server creates a `password_reset` OTP challenge in `user_auth.otp_challenges`.
+3. The server sends `Your Writers Block password reset code` with `sendAuthOtpEmail(...)`.
+4. `/api/auth/reset-password` consumes the OTP, revokes existing app sessions, and updates the password with the Supabase admin API.
 
-After a user clicks **Verify email** (or **Magic link** / **Reset password**), Supabase redirects to a URL you allow.
+Master Admin:
+1. `/api/auth/master-admin-sign-in` validates password first.
+2. The server checks `master_admin.users`.
+3. The server creates a Master Admin OTP challenge in `master_admin.otp_challenges`.
+4. `/api/auth/verify-code?mode=master-admin` consumes the OTP and sets HTTP-only cookies.
 
-1. **Authentication** → **URL Configuration** (or **Settings** under Auth).
-2. **Site URL:** production app origin, e.g. `https://yourdomain.com`.
-3. **Redirect URLs:** add:
-   - Production: `https://yourdomain.com/**` or the exact callback path `https://yourdomain.com/auth/callback`
-   - Local dev: `http://localhost:3000/**` and/or `http://localhost:3000/auth/callback`
+## Required Infrastructure
 
-The app’s sign-up action uses a redirect to `/auth/callback?next=…`; that final URL must be allowed or Supabase will block the redirect.
+Run the schema in `supabase/database.sql` so `user_auth.otp_challenges` exists.
+In Supabase Dashboard -> API settings, expose the `user_auth` and `master_admin` schemas so server-side Supabase JS `.schema(...)` calls can reach them.
 
-## 3. Test
+Set these server environment variables:
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `RESEND_API_KEY`
+- `RESEND_FROM_EMAIL`
+- `AUTH_OTP_SECRET` required in production; local development can fall back to `SUPABASE_SERVICE_ROLE_KEY`
+- `MASTER_ADMIN_OTP_SECRET` required in production; local development can fall back to `AUTH_OTP_SECRET` or `SUPABASE_SERVICE_ROLE_KEY`
 
-Use **Send test email** (if your Supabase project offers it) or register a new user with a real inbox. Confirm that:
+In production, set explicit OTP secrets instead of relying on provider keys as encryption secrets.
 
-- The message matches the dark Writers Block style.
-- The primary button opens a valid Supabase verify URL, then lands on your app (via `/auth/callback` for email confirmation).
+Sign-up and password-reset challenges do not store passwords. Sign-in and Master Admin challenges temporarily store encrypted Supabase session payloads until OTP verification succeeds or the challenge expires.
 
-## 4. Resend / SMTP (optional)
+## Supabase Templates
 
-If you use **Custom SMTP** (e.g. Resend) in Supabase, the same HTML is used; only the **sender** changes. The Next.js app’s own transactional email (billing, PDF, etc.) is sent via Resend in [`lib/email.ts`](../lib/email.ts) and uses the same visual system as [`lib/email-theme.ts`](../lib/email-theme.ts) for a consistent look with these Supabase auth emails.
+Supabase templates in `emails/supabase-*.html` are now legacy/reference material for hosted auth flows. They are not used by the normal signup/signin/reset business flow.
 
-## See also
-
-- [Admin operators (`master_admin_users`)](admin-operators.md) — separate from auth templates; defines who may use `/dashboard/admin` and Master Admin.
+If users receive a Supabase-branded verification or recovery link for normal app auth, some code path has regressed to hosted Supabase email delivery. The current auth API routes should not do that.

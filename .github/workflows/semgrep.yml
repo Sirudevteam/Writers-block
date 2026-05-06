@@ -1,0 +1,27 @@
+name: Semgrep
+
+on:
+  pull_request:
+    branches: [main, master]
+  push:
+    branches: [main, master]
+
+jobs:
+  semgrep:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Semgrep (community rules)
+        uses: semgrep/semgrep-action@v1
+        with:
+          config: >-
+            p/javascript
+            p/typescript
+            p/react
+            p/owasp-top-ten
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}

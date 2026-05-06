@@ -1,8 +1,6 @@
 const { withSentryConfig } = require('@sentry/nextjs')
 
 /** @type {import('next').NextConfig} */
-const isDev = process.env.NODE_ENV === 'development'
-
 const nextConfig = {
   reactStrictMode: true,
 
@@ -15,11 +13,6 @@ const nextConfig = {
         hostname: 'img.youtube.com',
         pathname: '/vi/**',
       },
-      {
-        protocol: 'https',
-        hostname: 'lottie.host',
-        pathname: '/**',
-      },
     ],
     deviceSizes: [640, 750, 828, 1080, 1200, 1920, 2048],
     imageSizes: [16, 32, 48, 64, 96, 128, 256, 384],
@@ -31,19 +24,15 @@ const nextConfig = {
   
   // Experimental features for better performance
   experimental: {
-    instrumentationHook: true,
     // Optimize package imports for common libraries
     optimizePackageImports: [
       'lucide-react',
       // framer-motion omitted: barrel re-exports + this optimizer can break runtime (undefined module factory).
-      '@radix-ui/react-dialog',
       '@radix-ui/react-dropdown-menu',
       '@radix-ui/react-select',
-      '@radix-ui/react-tabs',
     ],
     // Partial prerendering (enable when using Next.js canary)
     // ppr: true,
-    // Critters (optimizeCss) can break Tailwind + keyframe bundles in some cases; keep disabled for reliable auth UI.
   },
   
   // Headers for caching and security
@@ -73,34 +62,24 @@ const nextConfig = {
             value: '1; mode=block',
           },
           {
-            key: 'Referrer-Policy',
-            value: 'origin-when-cross-origin',
+            key: 'Permissions-Policy',
+            value: 'camera=(), microphone=(), geolocation=(), payment=(self), usb=(), bluetooth=()',
           },
           {
-            key: 'Content-Security-Policy',
-            value: [
-              "default-src 'self'",
-              `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""} https://checkout.razorpay.com https://va.vercel-scripts.com`,
-              "frame-src https://api.razorpay.com https://checkout.razorpay.com",
-              [
-                "connect-src 'self'",
-                "https://*.supabase.co",
-                "wss://*.supabase.co",
-                "https://api.replicate.com",
-                "https://*.upstash.io",
-                "https://api.resend.com",
-                "https://vitals.vercel-insights.com",
-                "https://*.vercel-insights.com",
-                "https://lottie.host",
-                "https://cdn.jsdelivr.net",
-                "https://unpkg.com",
-              ].join(" "),
-              "img-src 'self' data: blob: https://img.youtube.com https://lottie.host",
-              "style-src 'self' 'unsafe-inline'",
-              "font-src 'self' data:",
-              "media-src 'self'",
-              "worker-src 'self' blob:",
-            ].join('; '),
+            key: 'Cross-Origin-Opener-Policy',
+            value: 'same-origin',
+          },
+          {
+            key: 'Cross-Origin-Resource-Policy',
+            value: 'same-origin',
+          },
+          {
+            key: 'X-Permitted-Cross-Domain-Policies',
+            value: 'none',
+          },
+          {
+            key: 'Referrer-Policy',
+            value: 'origin-when-cross-origin',
           },
         ],
       },
