@@ -40,8 +40,9 @@ No test runner is configured. There is no `test` script in package.json.
 
 - **General API** — [lib/api-ip-limit.ts](lib/api-ip-limit.ts) applies 100 req/min per IP (when Redis is configured) to authenticated API routes. AI routes also keep stricter [lib/ai-rate-limits.ts](lib/ai-rate-limits.ts) limits.
 - **Subscription for AI** — [lib/ai-effective-plan.ts](lib/ai-effective-plan.ts) caches `subscriptions` plan/status in Redis (60s TTL) to cut DB reads; [lib/subscription-plan-cache.ts](lib/subscription-plan-cache.ts) keys are invalidated on successful payment in [app/api/razorpay/verify/route.ts](app/api/razorpay/verify/route.ts) and [app/api/razorpay/webhook/route.ts](app/api/razorpay/webhook/route.ts).
+- **AI credit reservations** - [lib/ai-credits.ts](lib/ai-credits.ts) reserves credits in Postgres before provider calls and settles each reservation after completion, cancellation, or failure.
 - **Server layouts** — [lib/supabase/server-auth.ts](lib/supabase/server-auth.ts) uses `getSession()` after middleware refresh to avoid a duplicate `getUser()` Auth round-trip on dashboard shell and related pages.
-- **usage_logs** — AI routes still use fire-and-forget inserts. If `usage_logs` write volume becomes a bottleneck, move to a queue (e.g. QStash) or batch workers; do not block the user response.
+- **usage_logs** - AI usage rows are written from settled credit reservations. If `usage_logs` write volume becomes a bottleneck, move reservation settlement side effects to a queue or batch worker without allowing provider calls before a successful reservation.
 
 ## Environment Setup
 
@@ -157,11 +158,24 @@ if (!ipResult.success) return NextResponse.json({ error: "..." }, { status: 429 
 const planResult = await getPlanRatelimit(effectivePlan).limit(user.id)
 if (!planResult.success) return NextResponse.json({ error: "..." }, { status: 429 })
 
-// 5. Fire-and-forget usage log
-void (supabase as any).from("usage_logs")
-  .insert({ user_id: user.id, endpoint: "generate", plan: effectivePlan })
+// 5. Reserve credits before provider work
+const reservation = await reserveAiCredit({
+  supabase,
+  userId: user.id,
+  endpoint: "generate",
+  credits: 1,
+})
+if (!reservation.ok) return NextResponse.json({ error: "..." }, { status: 402 })
 
-// 6. Call Replicate + stream response
+// 6. Mark provider start, call Replicate, then settle the reservation
+await markAiCreditProviderStarted(supabase, reservation.reservationId)
+try {
+  // Call Replicate + stream response
+  await settleAiCreditReservation(supabase, reservation.reservationId, "succeeded")
+} catch (error) {
+  await settleAiCreditReservation(supabase, reservation.reservationId, "failed_charged")
+  throw error
+}
 ```
 
 ### Rate Limiting
@@ -312,7 +326,7 @@ When adding new features, ensure:
 - [ ] **Database Queries** use `cache()` from React (server components)
 - [ ] **AI Endpoints** have both IP rate limit + per-user plan rate limit
 - [ ] **AI Endpoints** check auth + subscription status
-- [ ] **AI Endpoints** log to `usage_logs` (fire-and-forget)
+- [ ] **AI Endpoints** reserve credits before provider calls and settle exactly once
 - [ ] **Admin/Cron clients** initialized inside handler, not at module level
 - [ ] **Error Boundaries** added for new route segments
 - [ ] **Bundle Size** checked with `npm run build`
@@ -389,9 +403,10 @@ vercel.json               # Cron job schedule (daily 9AM UTC)
 
 1. Create file in `app/api/new-feature/route.ts`
 2. Add auth check → subscription check → IP rate limit → plan rate limit (in that order)
-3. Add fire-and-forget usage log: `void (supabase as any).from("usage_logs").insert(...)`
-4. Stream response via ReadableStream + SSE
-5. Add `Cache-Control: no-cache` header
+3. Reserve credits with `reserveAiCredit` before any provider call. Return 402/429/503 without calling the provider when reservation fails.
+4. Mark provider start immediately before the external AI call, then settle as `succeeded`, `failed_charged`, or release if the provider never started.
+5. Stream response via ReadableStream + SSE
+6. Add `Cache-Control: no-cache` header
 
 ### Adding a New Database Table
 
@@ -407,6 +422,14 @@ vercel.json               # Cron job schedule (daily 9AM UTC)
 1. Add to `supabase/database.sql` (PERFORMANCE INDEXES section) using `CREATE INDEX IF NOT EXISTS`
 2. Run in Supabase SQL Editor for existing databases
 3. Run `ANALYZE table_name;`
+
+### Applying AI Credit Reservation Schema
+
+The AI credit routes fail closed when the reservation RPCs are missing. Before enabling these routes in an environment, apply the `ai_credit_reservations` table and `reserve_ai_credit`, `mark_ai_credit_provider_started`, and `settle_ai_credit_reservation` functions from `supabase/database.sql`.
+
+- `reserve_ai_credit` locks the active user subscription row before checking held and settled usage.
+- `mark_ai_credit_provider_started` records the point after which provider-started failures are charged.
+- `settle_ai_credit_reservation` is the only path that writes the final usage event.
 
 ### Adding a New Component with Animations
 
@@ -461,7 +484,7 @@ Prices are controlled by:
 - **Annual Plans:** `billing_cycle` column, 365-day period, env-based annual pricing
 - **Subscription Enforcement:** All AI endpoints check plan status — expired/cancelled → free tier limits
 - **Per-User Rate Limits:** Plan-based daily limits (free: 5/day, pro: 50/day, premium: 200/day)
-- **Usage Tracking:** `usage_logs` table — all AI endpoints log fire-and-forget
+- **Usage Tracking:** settled AI credit reservations write final `usage_logs` rows
 - **Email Notifications:** Resend integration (`lib/email.ts`) — payment confirmation + 7-day expiry warnings
 - **Admin Dashboard:** `/dashboard/admin` with MRR, users, plan breakdown, usage stats, recent payments
 - **Subscription Expiry Cron:** `/api/cron/check-subscriptions` runs daily at 9AM UTC via Vercel Cron

@@ -103,6 +103,9 @@ export type Database = {
           user_id: string | null
           endpoint: string
           plan: string
+          ai_credit_reservation_id: string | null
+          credits_charged: number
+          outcome: string
           created_at: string
         }
         Insert: {
@@ -110,9 +113,88 @@ export type Database = {
           user_id?: string | null
           endpoint: string
           plan?: string
+          ai_credit_reservation_id?: string | null
+          credits_charged?: number
+          outcome?: string
           created_at?: string
         }
         Update: Record<string, never>
+        Relationships: []
+      }
+      ai_credit_topups: {
+        Row: {
+          id: string
+          user_id: string
+          credits_granted: number
+          source: string
+          payment_id: string | null
+          expires_at: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          credits_granted: number
+          source?: string
+          payment_id?: string | null
+          expires_at?: string | null
+          created_at?: string
+        }
+        Update: {
+          source?: string
+          payment_id?: string | null
+          expires_at?: string | null
+        }
+        Relationships: []
+      }
+      ai_credit_reservations: {
+        Row: {
+          id: string
+          user_id: string
+          endpoint: string
+          plan: "free" | "pro" | "premium"
+          status: "reserved" | "committed" | "failed_charged" | "released"
+          estimated_credits: number
+          reserved_included_credits: number
+          reserved_topup_credits: number
+          charged_included_credits: number
+          charged_topup_credits: number
+          period_start: string
+          period_end: string
+          provider_started_at: string | null
+          failure_code: string | null
+          expires_at: string
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          endpoint: string
+          plan: "free" | "pro" | "premium"
+          status?: "reserved" | "committed" | "failed_charged" | "released"
+          estimated_credits: number
+          reserved_included_credits?: number
+          reserved_topup_credits?: number
+          charged_included_credits?: number
+          charged_topup_credits?: number
+          period_start: string
+          period_end: string
+          provider_started_at?: string | null
+          failure_code?: string | null
+          expires_at?: string
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          status?: "reserved" | "committed" | "failed_charged" | "released"
+          charged_included_credits?: number
+          charged_topup_credits?: number
+          provider_started_at?: string | null
+          failure_code?: string | null
+          expires_at?: string
+          updated_at?: string
+        }
         Relationships: []
       }
       projects: {
@@ -216,6 +298,30 @@ export type Database = {
         Args: Record<string, never>
         Returns: Json
       }
+      reserve_ai_credit: {
+        Args: {
+          p_user_id: string
+          p_endpoint: string
+          p_plan: string
+          p_estimated_credits: number
+        }
+        Returns: Json
+      }
+      mark_ai_credit_provider_started: {
+        Args: {
+          p_reservation_id: string
+        }
+        Returns: Json
+      }
+      settle_ai_credit_reservation: {
+        Args: {
+          p_reservation_id: string
+          p_outcome: string
+          p_actual_credits?: number | null
+          p_failure_code?: string | null
+        }
+        Returns: Json
+      }
       apply_subscription_payment: {
         Args: {
           p_user_id: string
@@ -239,6 +345,8 @@ export type Subscription = Database["public"]["Tables"]["subscriptions"]["Row"]
 export type Project = Database["public"]["Tables"]["projects"]["Row"]
 export type Document = Database["public"]["Tables"]["documents"]["Row"]
 export type UsageLog = Database["public"]["Tables"]["usage_logs"]["Row"]
+export type AiCreditTopup = Database["public"]["Tables"]["ai_credit_topups"]["Row"]
+export type AiCreditReservation = Database["public"]["Tables"]["ai_credit_reservations"]["Row"]
 export type RazorpayPayment = Database["public"]["Tables"]["razorpay_payments"]["Row"]
 
 /** Columns returned by project list endpoints (excludes heavy `content` / metadata blobs). */

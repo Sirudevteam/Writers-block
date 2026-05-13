@@ -5,7 +5,14 @@ import { runAiRateLimits } from "@/lib/ai-rate-limits"
 import { getEffectivePlanForApiUser } from "@/lib/ai-effective-plan"
 import { apiIpLimitOr429 } from "@/lib/api-ip-limit"
 import { buildTextCompletionInput, getReplicateModelForPlan, getStreamOutputText } from "@/lib/replicate-model"
-import type { SubscriptionPlan } from "@/types/project"
+import { isAiEndpointAllowedForPlan } from "@/lib/ai-credit-policy"
+import {
+  aiCreditHeaders,
+  createAiCreditSseStream,
+  markAiProviderStarted,
+  reserveAiCredits,
+  settleAiCreditReservation,
+} from "@/lib/ai-credits"
 
 const replicate = new Replicate({ auth: process.env.REPLICATE_API_TOKEN })
 
@@ -31,8 +38,6 @@ const PRESETS: Record<string, { label: string; systemExtra: string }> = {
       "Ground the scene in everyday speech and real stakes; reduce melodrama where it helps; keep Tamil natural for the setting.",
   },
 }
-
-const ALLOWED: SubscriptionPlan[] = ["pro", "premium"]
 
 function buildSystemPrompt(styleId: string): string {
   const base = `You are an expert Tamil cinema co-writer. You REWRITE the screenplay the user provides.
@@ -68,7 +73,7 @@ export async function POST(req: NextRequest) {
     }
 
     const effectivePlan = await getEffectivePlanForApiUser(supabase, user.id)
-    if (!ALLOWED.includes(effectivePlan)) {
+    if (!isAiEndpointAllowedForPlan("rewrite-style", effectivePlan)) {
       return NextResponse.json(
         { error: "Style rewrite is available on Pro and Premium. Upgrade to unlock." },
         { status: 403 }
@@ -78,7 +83,6 @@ export async function POST(req: NextRequest) {
     const rate = await runAiRateLimits(req, effectivePlan, user.id)
     if (!rate.ok) return rate.response
     const { planQuota } = rate
-    const model = getReplicateModelForPlan(effectivePlan)
 
     const { screenplay, styleId } = await req.json()
     const resolvedStyle = typeof styleId === "string" && styleId in PRESETS ? styleId : "mass_action"
@@ -87,11 +91,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Screenplay is too short to rewrite" }, { status: 400 })
     }
 
-    void (supabase as any).from("usage_logs").insert({
-      user_id: user.id,
+    const credit = await reserveAiCredits(supabase as any, {
+      userId: user.id,
       endpoint: "rewrite-style",
       plan: effectivePlan,
     })
+    if (!credit.ok) return credit.response
+    const { reservation } = credit
+    const model = getReplicateModelForPlan(reservation.plan)
 
     const systemPrompt = buildSystemPrompt(resolvedStyle)
     const userPrompt = `Rewrite this entire screenplay in the chosen style.\n\n${screenplay}`
@@ -105,22 +112,27 @@ export async function POST(req: NextRequest) {
       llama: { minTokens: 400, presencePenalty: 0.3 },
     })
 
-    const stream = await replicate.stream(model as `${string}/${string}`, { input })
+    let providerStarted = false
+    let stream
+    try {
+      await markAiProviderStarted(supabase as any, reservation)
+      providerStarted = true
+      stream = await replicate.stream(model as `${string}/${string}`, { input })
+    } catch (error) {
+      await settleAiCreditReservation(supabase as any, reservation, {
+        outcome: providerStarted ? "failed_charged" : "release",
+        failureCode: providerStarted ? "provider_start_error" : "provider_not_started",
+      }).catch((settleError) => {
+        console.error("[ai-credits] failed to settle rewrite-style startup error", settleError)
+      })
+      throw error
+    }
 
-    const readableStream = new ReadableStream({
-      async start(controller) {
-        const encoder = new TextEncoder()
-        for await (const chunk of stream) {
-          const text = getStreamOutputText(chunk)
-          if (text) {
-            controller.enqueue(
-              encoder.encode(`data: ${JSON.stringify({ content: text })}\n\n`)
-            )
-          }
-        }
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true })}\n\n`))
-        controller.close()
-      },
+    const readableStream = createAiCreditSseStream({
+      providerStream: stream,
+      supabase: supabase as any,
+      reservation,
+      getText: getStreamOutputText,
     })
 
     return new NextResponse(readableStream, {
@@ -128,6 +140,7 @@ export async function POST(req: NextRequest) {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
         Connection: "keep-alive",
+        ...aiCreditHeaders(reservation),
         "X-RateLimit-Limit": String(planQuota.limit),
         "X-RateLimit-Remaining": String(planQuota.remaining),
         "X-RateLimit-Reset": String(Math.ceil(planQuota.reset / 1000)),

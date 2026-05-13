@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { apiIpLimitOr429 } from "@/lib/api-ip-limit"
+import { runAiRateLimits } from "@/lib/ai-rate-limits"
+import { getEffectivePlanForApiUser } from "@/lib/ai-effective-plan"
+import {
+  aiCreditHeaders,
+  markAiProviderStarted,
+  reserveAiCredits,
+  settleAiCreditReservation,
+} from "@/lib/ai-credits"
 import Anthropic from "@anthropic-ai/sdk"
 
 const anthropic = new Anthropic({
@@ -192,28 +200,21 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Check rate limiting (simplified - in production use proper rate limiting)
-    const { data: usageData } = await supabase
-      .from("usage_logs")
-      .select("id")
-      .eq("user_id", user.id)
-      .eq("endpoint", "movie-references")
-      .gte("created_at", new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
+    const effectivePlan = await getEffectivePlanForApiUser(supabase, user.id)
+    const rate = await runAiRateLimits(request, effectivePlan, user.id)
+    if (!rate.ok) return rate.response
 
-    const dailyLimit = 20 // Adjust based on subscription tier
-    if (usageData && usageData.length >= dailyLimit) {
-      return NextResponse.json(
-        { error: "Daily limit reached. Please try again tomorrow." },
-        { status: 429 }
-      )
+    if (!process.env.ANTHROPIC_API_KEY) {
+      return NextResponse.json({ references: getFallbackReferences(genre, mood, screenplay) })
     }
 
-    // Log usage
-    await (supabase.from("usage_logs") as any).insert({
-      user_id: user.id,
+    const credit = await reserveAiCredits(supabase as any, {
+      userId: user.id,
       endpoint: "movie-references",
-      plan: "free", // Get from subscription in production
+      plan: effectivePlan,
     })
+    if (!credit.ok) return credit.response
+    const { reservation } = credit
 
     // Prepare the screenplay context
     const screenplayContext = `
@@ -227,8 +228,11 @@ ${screenplay.slice(0, 3000)}...
 
 Analyze this screenplay and suggest relevant movie reference scenes.`
 
-    // Call Claude API
+    let providerStarted = false
     try {
+      await markAiProviderStarted(supabase as any, reservation)
+      providerStarted = true
+
       const message = await anthropic.messages.create({
         model: "claude-3-5-sonnet-20241022",
         max_tokens: 2000,
@@ -268,18 +272,31 @@ Analyze this screenplay and suggest relevant movie reference scenes.`
           thumbnail: `https://img.youtube.com/vi/${ref.youtubeId}/maxresdefault.jpg`,
         }))
 
-        return NextResponse.json({ references })
+        await settleAiCreditReservation(supabase as any, reservation, { outcome: "commit" })
+        return NextResponse.json({ references }, { headers: aiCreditHeaders(reservation) })
       } catch (parseError) {
         console.error("Failed to parse AI response:", parseError)
+        await settleAiCreditReservation(supabase as any, reservation, {
+          outcome: "failed_charged",
+          failureCode: "provider_parse_error",
+        }).catch((settleError) => {
+          console.error("[ai-credits] failed to settle movie reference parse error", settleError)
+        })
         // Fall back to generated references based on genre/mood
         const fallbackRefs = getFallbackReferences(genre, mood, screenplay)
-        return NextResponse.json({ references: fallbackRefs })
+        return NextResponse.json({ references: fallbackRefs }, { headers: aiCreditHeaders(reservation) })
       }
     } catch (aiError) {
       console.error("AI API error:", aiError)
+      await settleAiCreditReservation(supabase as any, reservation, {
+        outcome: providerStarted ? "failed_charged" : "release",
+        failureCode: providerStarted ? "provider_error" : "provider_not_started",
+      }).catch((settleError) => {
+        console.error("[ai-credits] failed to settle movie reference provider error", settleError)
+      })
       // Fall back to rule-based references
       const fallbackRefs = getFallbackReferences(genre, mood, screenplay)
-      return NextResponse.json({ references: fallbackRefs })
+      return NextResponse.json({ references: fallbackRefs }, { headers: aiCreditHeaders(reservation) })
     }
   } catch (error) {
     console.error("Movie references API error:", error)
