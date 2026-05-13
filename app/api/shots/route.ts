@@ -7,6 +7,12 @@ import { runAiRateLimits } from "@/lib/ai-rate-limits"
 import { getEffectivePlanForApiUser } from "@/lib/ai-effective-plan"
 import { apiIpLimitOr429 } from "@/lib/api-ip-limit"
 import { buildTextCompletionInput, getReplicateModelForPlan } from "@/lib/replicate-model"
+import {
+  aiCreditHeaders,
+  markAiProviderStarted,
+  reserveAiCredits,
+  settleAiCreditReservation,
+} from "@/lib/ai-credits"
 
 const replicate = new Replicate({
   auth: process.env.REPLICATE_API_TOKEN,
@@ -30,7 +36,6 @@ export async function POST(req: NextRequest) {
     const effectivePlan = await getEffectivePlanForApiUser(supabase, user.id)
     const rate = await runAiRateLimits(req, effectivePlan, user.id)
     if (!rate.ok) return rate.response
-    const model = getReplicateModelForPlan(effectivePlan)
 
     const { sceneText } = await req.json()
 
@@ -41,9 +46,14 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // Fire-and-forget usage log
-    void (supabase as any).from("usage_logs")
-      .insert({ user_id: user.id, endpoint: "shots", plan: effectivePlan })
+    const credit = await reserveAiCredits(supabase as any, {
+      userId: user.id,
+      endpoint: "shots",
+      plan: effectivePlan,
+    })
+    if (!credit.ok) return credit.response
+    const { reservation } = credit
+    const model = getReplicateModelForPlan(reservation.plan)
 
     const systemPrompt = `நீ ஒரு தொழில்முறை திரைப்பட இயக்குநர் மற்றும் ஒளிப்பதிவாளர்.
 
@@ -82,7 +92,21 @@ JSON வடிவத்தில் மட்டும் பதிலளிக�
       llama: { minTokens: 0, presencePenalty: 1.15 },
     })
 
-    const output = await replicate.run(model as `${string}/${string}`, { input })
+    let providerStarted = false
+    let output
+    try {
+      await markAiProviderStarted(supabase as any, reservation)
+      providerStarted = true
+      output = await replicate.run(model as `${string}/${string}`, { input })
+    } catch (error) {
+      await settleAiCreditReservation(supabase as any, reservation, {
+        outcome: providerStarted ? "failed_charged" : "release",
+        failureCode: providerStarted ? "provider_run_error" : "provider_not_started",
+      }).catch((settleError) => {
+        console.error("[ai-credits] failed to settle shots provider error", settleError)
+      })
+      throw error
+    }
 
     let text = ""
     if (Array.isArray(output)) {
@@ -100,13 +124,21 @@ JSON வடிவத்தில் மட்டும் பதிலளிக�
         shots = JSON.parse(text)
       }
     } catch {
+      await settleAiCreditReservation(supabase as any, reservation, {
+        outcome: "failed_charged",
+        failureCode: "provider_parse_error",
+      }).catch((settleError) => {
+        console.error("[ai-credits] failed to settle shots parse error", settleError)
+      })
       return NextResponse.json(
         { error: "Failed to parse shot suggestions. Please try again." },
         { status: 500 }
       )
     }
 
-    return NextResponse.json({ shots })
+    await settleAiCreditReservation(supabase as any, reservation, { outcome: "commit" })
+
+    return NextResponse.json({ shots }, { headers: aiCreditHeaders(reservation) })
   } catch (error: any) {
     if (error?.status === 401 || error?.message?.includes("unauthorized")) {
       return NextResponse.json(

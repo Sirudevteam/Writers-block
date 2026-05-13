@@ -87,9 +87,10 @@ Browser
 ### Important Backend Patterns
 
 - Authenticated AI routes check the current user before model calls.
+- AI routes reserve monthly included/top-up credits in Postgres before calling Replicate, so concurrent requests cannot race past the monthly budget.
 - Effective plan is derived from subscription state, so expired or inactive subscriptions fall back safely.
 - AI endpoints apply both IP-based and per-user daily limits.
-- Usage events are logged to `usage_logs`.
+- Settled AI credit reservations write usage events to `usage_logs`.
 - Admin, webhook, and cron handlers use the Supabase service role inside the handler, not at module scope.
 - **Operator privileges** are stored in `public.master_admin_users` (see [docs/admin-operators.md](docs/admin-operators.md)), not in env email lists.
 
@@ -302,6 +303,16 @@ types/
 - Webhook reconciliation happens in `/api/razorpay/webhook`.
 - Subscription-expiry maintenance runs through `vercel.json` on `/api/cron/check-subscriptions`.
 
+## AI Credit Notes
+
+- One AI credit equals one reserved request estimate.
+- `reserve_ai_credit` runs in Postgres and locks the user's subscription row before calculating available monthly included and top-up credits.
+- AI routes call the reservation RPC before starting Replicate. If the reservation fails or credits are exhausted, the provider call is not made.
+- If a provider call starts and then fails, disconnects, or is cancelled, the reservation is charged as `failed_charged` using the reserved estimate.
+- If failure happens before the provider starts, the reservation is released.
+- Free users are blocked from paid-only rewrite/batch-rewrite endpoints before provider calls.
+- Apply `supabase/database.sql` before deploying these route changes; routes fail closed if the reservation RPCs are unavailable.
+
 ## Performance And Reliability Notes
 
 - Rate limits are enforced with Upstash Redis.
@@ -318,6 +329,7 @@ Recommended target: Vercel.
 
 - Add all required environment variables.
 - Apply `supabase/database.sql`.
+- Confirm `reserve_ai_credit`, `mark_ai_credit_provider_started`, and `settle_ai_credit_reservation` exist before enabling AI routes in production.
 - Configure Razorpay webhook to `/api/razorpay/webhook`.
 - Configure Resend sender domain if emailing PDFs or billing notifications.
 - Grant at least one row in `master_admin_users` before using admin routes.

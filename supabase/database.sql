@@ -5,8 +5,9 @@
 -- columns, IF NOT EXISTS indexes/constraints, replaces functions).
 --
 -- Objects: profiles, master_admin_users, subscriptions, projects, documents, usage_logs,
--- razorpay_payments, storage bucket `documents`, helper functions
--- (apply_subscription_payment, admin_subscription_group_counts).
+-- ai_credit_topups, ai_credit_reservations, razorpay_payments, storage bucket `documents`,
+-- helper functions (AI credit reservation, apply_subscription_payment,
+-- admin_subscription_group_counts).
 -- ============================================================
 
 -- =========================
@@ -92,6 +93,45 @@ CREATE TABLE IF NOT EXISTS public.usage_logs (
   created_at  TIMESTAMPTZ DEFAULT NOW() NOT NULL
 );
 
+-- ai_credit_topups: optional paid/granted credits outside monthly included credits.
+CREATE TABLE IF NOT EXISTS public.ai_credit_topups (
+  id               UUID        DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id          UUID        REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+  credits_granted  INTEGER     NOT NULL CHECK (credits_granted > 0),
+  source           TEXT        DEFAULT 'manual' NOT NULL,
+  payment_id       TEXT,
+  expires_at       TIMESTAMPTZ,
+  created_at       TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+
+-- ai_credit_reservations: source of truth for pre-provider reservations and settlement.
+CREATE TABLE IF NOT EXISTS public.ai_credit_reservations (
+  id                         UUID        DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id                    UUID        REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+  endpoint                   TEXT        NOT NULL,
+  plan                       TEXT        CHECK (plan IN ('free', 'pro', 'premium')) NOT NULL,
+  status                     TEXT        CHECK (status IN ('reserved', 'committed', 'failed_charged', 'released')) DEFAULT 'reserved' NOT NULL,
+  estimated_credits          INTEGER     NOT NULL CHECK (estimated_credits > 0),
+  reserved_included_credits  INTEGER     DEFAULT 0 NOT NULL CHECK (reserved_included_credits >= 0),
+  reserved_topup_credits     INTEGER     DEFAULT 0 NOT NULL CHECK (reserved_topup_credits >= 0),
+  charged_included_credits   INTEGER     DEFAULT 0 NOT NULL CHECK (charged_included_credits >= 0),
+  charged_topup_credits      INTEGER     DEFAULT 0 NOT NULL CHECK (charged_topup_credits >= 0),
+  period_start               TIMESTAMPTZ NOT NULL,
+  period_end                 TIMESTAMPTZ NOT NULL,
+  provider_started_at        TIMESTAMPTZ,
+  failure_code               TEXT,
+  expires_at                 TIMESTAMPTZ DEFAULT (NOW() + INTERVAL '2 hours') NOT NULL,
+  created_at                 TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+  updated_at                 TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+
+ALTER TABLE public.usage_logs
+  ADD COLUMN IF NOT EXISTS ai_credit_reservation_id UUID REFERENCES public.ai_credit_reservations(id);
+ALTER TABLE public.usage_logs
+  ADD COLUMN IF NOT EXISTS credits_charged INTEGER DEFAULT 1 NOT NULL;
+ALTER TABLE public.usage_logs
+  ADD COLUMN IF NOT EXISTS outcome TEXT DEFAULT 'completed' NOT NULL;
+
 -- razorpay_payments: payment ledger; apply_subscription_payment extends subscription
 CREATE TABLE IF NOT EXISTS public.razorpay_payments (
   id                  UUID        DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -169,12 +209,391 @@ CREATE INDEX IF NOT EXISTS usage_logs_endpoint_date_idx
 CREATE INDEX IF NOT EXISTS usage_logs_created_at_idx
   ON public.usage_logs(created_at DESC);
 
+CREATE INDEX IF NOT EXISTS ai_credit_topups_user_idx
+  ON public.ai_credit_topups(user_id, expires_at);
+
+CREATE INDEX IF NOT EXISTS ai_credit_reservations_user_period_idx
+  ON public.ai_credit_reservations(user_id, period_start, status);
+
+CREATE INDEX IF NOT EXISTS ai_credit_reservations_expiry_idx
+  ON public.ai_credit_reservations(status, expires_at)
+  WHERE status = 'reserved';
+
 CREATE INDEX IF NOT EXISTS razorpay_payments_user_created_idx
   ON public.razorpay_payments(user_id, created_at DESC);
 
 -- =========================
 -- 4) FUNCTIONS
 -- =========================
+
+CREATE OR REPLACE FUNCTION public.ai_monthly_credit_limit(p_plan TEXT)
+RETURNS INTEGER
+LANGUAGE sql
+IMMUTABLE
+AS $$
+  SELECT CASE p_plan
+    WHEN 'premium' THEN 6000
+    WHEN 'pro' THEN 1500
+    ELSE 150
+  END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.ai_minimum_credit_estimate(p_endpoint TEXT)
+RETURNS INTEGER
+LANGUAGE sql
+IMMUTABLE
+AS $$
+  SELECT CASE p_endpoint
+    WHEN 'rewrite-style' THEN 2
+    WHEN 'batch-rewrite' THEN 5
+    WHEN 'batch-rewrite-style' THEN 5
+    WHEN 'rewrite-batch' THEN 5
+    ELSE 1
+  END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.expire_stale_ai_credit_reservations(p_user_id UUID DEFAULT NULL)
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_rec RECORD;
+  v_count INTEGER := 0;
+BEGIN
+  FOR v_rec IN
+    SELECT *
+    FROM public.ai_credit_reservations
+    WHERE status = 'reserved'
+      AND expires_at < NOW()
+      AND (p_user_id IS NULL OR user_id = p_user_id)
+    FOR UPDATE
+  LOOP
+    IF v_rec.provider_started_at IS NULL THEN
+      UPDATE public.ai_credit_reservations
+      SET
+        status = 'released',
+        failure_code = COALESCE(failure_code, 'reservation_expired_before_provider'),
+        updated_at = NOW()
+      WHERE id = v_rec.id;
+    ELSE
+      UPDATE public.ai_credit_reservations
+      SET
+        status = 'failed_charged',
+        charged_included_credits = reserved_included_credits,
+        charged_topup_credits = reserved_topup_credits,
+        failure_code = COALESCE(failure_code, 'reservation_expired_after_provider'),
+        updated_at = NOW()
+      WHERE id = v_rec.id;
+
+      INSERT INTO public.usage_logs (
+        user_id, endpoint, plan, ai_credit_reservation_id, credits_charged, outcome
+      )
+      VALUES (
+        v_rec.user_id,
+        v_rec.endpoint,
+        v_rec.plan,
+        v_rec.id,
+        v_rec.reserved_included_credits + v_rec.reserved_topup_credits,
+        'failed_charged'
+      );
+    END IF;
+
+    v_count := v_count + 1;
+  END LOOP;
+
+  RETURN v_count;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.reserve_ai_credit(
+  p_user_id UUID,
+  p_endpoint TEXT,
+  p_plan TEXT,
+  p_estimated_credits INTEGER
+) RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_period_start TIMESTAMPTZ := date_trunc('month', NOW());
+  v_period_end TIMESTAMPTZ := date_trunc('month', NOW()) + INTERVAL '1 month';
+  v_sub_plan TEXT;
+  v_sub_status TEXT;
+  v_effective_plan TEXT;
+  v_estimated INTEGER;
+  v_monthly_limit INTEGER;
+  v_included_held INTEGER;
+  v_topup_granted INTEGER;
+  v_topup_held INTEGER;
+  v_included_available INTEGER;
+  v_topup_available INTEGER;
+  v_included_reserve INTEGER;
+  v_topup_reserve INTEGER;
+  v_reservation_id UUID;
+BEGIN
+  IF auth.uid() IS DISTINCT FROM p_user_id
+     AND COALESCE(auth.role(), '') <> 'service_role' THEN
+    RAISE EXCEPTION 'not_authorized' USING ERRCODE = '42501';
+  END IF;
+
+  v_estimated := GREATEST(
+    COALESCE(p_estimated_credits, 1),
+    public.ai_minimum_credit_estimate(COALESCE(p_endpoint, ''))
+  );
+
+  IF v_estimated < 1 OR v_estimated > 10000 THEN
+    RETURN jsonb_build_object('status', 'error', 'message', 'invalid estimated credits');
+  END IF;
+
+  PERFORM public.expire_stale_ai_credit_reservations(p_user_id);
+
+  INSERT INTO public.subscriptions (user_id, plan, projects_limit)
+  VALUES (p_user_id, 'free', 5)
+  ON CONFLICT (user_id) DO NOTHING;
+
+  SELECT plan, status INTO v_sub_plan, v_sub_status
+  FROM public.subscriptions
+  WHERE user_id = p_user_id
+  FOR UPDATE;
+
+  v_effective_plan := CASE
+    WHEN v_sub_status = 'active' AND v_sub_plan IN ('free', 'pro', 'premium') THEN v_sub_plan
+    ELSE 'free'
+  END;
+
+  IF v_effective_plan = 'free'
+     AND p_endpoint IN ('rewrite-style', 'batch-rewrite', 'batch-rewrite-style', 'rewrite-batch') THEN
+    RETURN jsonb_build_object('status', 'paid_plan_required', 'plan', v_effective_plan);
+  END IF;
+
+  v_monthly_limit := public.ai_monthly_credit_limit(v_effective_plan);
+
+  SELECT COALESCE(SUM(
+    CASE
+      WHEN status = 'reserved' THEN reserved_included_credits
+      ELSE charged_included_credits
+    END
+  ), 0)::INTEGER
+  INTO v_included_held
+  FROM public.ai_credit_reservations
+  WHERE user_id = p_user_id
+    AND period_start = v_period_start
+    AND status IN ('reserved', 'committed', 'failed_charged');
+
+  SELECT COALESCE(SUM(credits_granted), 0)::INTEGER
+  INTO v_topup_granted
+  FROM public.ai_credit_topups
+  WHERE user_id = p_user_id;
+
+  SELECT COALESCE(SUM(
+    CASE
+      WHEN status = 'reserved' THEN reserved_topup_credits
+      ELSE charged_topup_credits
+    END
+  ), 0)::INTEGER
+  INTO v_topup_held
+  FROM public.ai_credit_reservations
+  WHERE user_id = p_user_id
+    AND status IN ('reserved', 'committed', 'failed_charged');
+
+  v_included_available := GREATEST(0, v_monthly_limit - v_included_held);
+  v_topup_available := GREATEST(0, v_topup_granted - v_topup_held);
+
+  IF v_estimated > (v_included_available + v_topup_available) THEN
+    RETURN jsonb_build_object(
+      'status', 'insufficient_credits',
+      'plan', v_effective_plan,
+      'estimated_credits', v_estimated,
+      'monthly_limit', v_monthly_limit,
+      'included_available', v_included_available,
+      'topup_available', v_topup_available
+    );
+  END IF;
+
+  v_included_reserve := LEAST(v_estimated, v_included_available);
+  v_topup_reserve := v_estimated - v_included_reserve;
+
+  INSERT INTO public.ai_credit_reservations (
+    user_id,
+    endpoint,
+    plan,
+    estimated_credits,
+    reserved_included_credits,
+    reserved_topup_credits,
+    period_start,
+    period_end
+  )
+  VALUES (
+    p_user_id,
+    p_endpoint,
+    v_effective_plan,
+    v_estimated,
+    v_included_reserve,
+    v_topup_reserve,
+    v_period_start,
+    v_period_end
+  )
+  RETURNING id INTO v_reservation_id;
+
+  RETURN jsonb_build_object(
+    'status', 'reserved',
+    'reservation_id', v_reservation_id,
+    'plan', v_effective_plan,
+    'estimated_credits', v_estimated,
+    'included_credits', v_included_reserve,
+    'topup_credits', v_topup_reserve,
+    'monthly_limit', v_monthly_limit,
+    'included_available_after', v_included_available - v_included_reserve,
+    'topup_available_after', v_topup_available - v_topup_reserve,
+    'period_start', v_period_start,
+    'period_end', v_period_end
+  );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.mark_ai_credit_provider_started(
+  p_reservation_id UUID
+) RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_user_id UUID;
+BEGIN
+  SELECT user_id INTO v_user_id
+  FROM public.ai_credit_reservations
+  WHERE id = p_reservation_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('status', 'not_found');
+  END IF;
+
+  IF auth.uid() IS DISTINCT FROM v_user_id
+     AND COALESCE(auth.role(), '') <> 'service_role' THEN
+    RAISE EXCEPTION 'not_authorized' USING ERRCODE = '42501';
+  END IF;
+
+  UPDATE public.ai_credit_reservations
+  SET
+    provider_started_at = COALESCE(provider_started_at, NOW()),
+    updated_at = NOW()
+  WHERE id = p_reservation_id
+    AND status = 'reserved';
+
+  RETURN jsonb_build_object('status', 'provider_started');
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.settle_ai_credit_reservation(
+  p_reservation_id UUID,
+  p_outcome TEXT,
+  p_actual_credits INTEGER DEFAULT NULL,
+  p_failure_code TEXT DEFAULT NULL
+) RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_rec RECORD;
+  v_actual INTEGER;
+  v_charged_included INTEGER;
+  v_charged_topup INTEGER;
+  v_new_status TEXT;
+BEGIN
+  SELECT *
+  INTO v_rec
+  FROM public.ai_credit_reservations
+  WHERE id = p_reservation_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('status', 'not_found');
+  END IF;
+
+  IF auth.uid() IS DISTINCT FROM v_rec.user_id
+     AND COALESCE(auth.role(), '') <> 'service_role' THEN
+    RAISE EXCEPTION 'not_authorized' USING ERRCODE = '42501';
+  END IF;
+
+  IF v_rec.status <> 'reserved' THEN
+    RETURN jsonb_build_object('status', 'already_settled', 'current_status', v_rec.status);
+  END IF;
+
+  IF p_outcome = 'release' AND v_rec.provider_started_at IS NULL THEN
+    UPDATE public.ai_credit_reservations
+    SET
+      status = 'released',
+      failure_code = p_failure_code,
+      updated_at = NOW()
+    WHERE id = p_reservation_id;
+
+    RETURN jsonb_build_object(
+      'status', 'released',
+      'charged_included_credits', 0,
+      'charged_topup_credits', 0
+    );
+  END IF;
+
+  IF p_outcome NOT IN ('commit', 'failed_charged', 'release') THEN
+    RETURN jsonb_build_object('status', 'error', 'message', 'invalid outcome');
+  END IF;
+
+  v_actual := LEAST(
+    GREATEST(COALESCE(p_actual_credits, v_rec.estimated_credits), 1),
+    v_rec.estimated_credits
+  );
+  v_charged_included := LEAST(v_actual, v_rec.reserved_included_credits);
+  v_charged_topup := LEAST(
+    v_actual - v_charged_included,
+    v_rec.reserved_topup_credits
+  );
+  v_new_status := CASE WHEN p_outcome = 'commit' THEN 'committed' ELSE 'failed_charged' END;
+
+  UPDATE public.ai_credit_reservations
+  SET
+    status = v_new_status,
+    charged_included_credits = v_charged_included,
+    charged_topup_credits = v_charged_topup,
+    provider_started_at = COALESCE(provider_started_at, NOW()),
+    failure_code = p_failure_code,
+    updated_at = NOW()
+  WHERE id = p_reservation_id;
+
+  INSERT INTO public.usage_logs (
+    user_id, endpoint, plan, ai_credit_reservation_id, credits_charged, outcome
+  )
+  VALUES (
+    v_rec.user_id,
+    v_rec.endpoint,
+    v_rec.plan,
+    p_reservation_id,
+    v_charged_included + v_charged_topup,
+    v_new_status
+  );
+
+  RETURN jsonb_build_object(
+    'status', v_new_status,
+    'charged_included_credits', v_charged_included,
+    'charged_topup_credits', v_charged_topup
+  );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.ai_monthly_credit_limit(TEXT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.ai_minimum_credit_estimate(TEXT) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.expire_stale_ai_credit_reservations(UUID) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.reserve_ai_credit(UUID, TEXT, TEXT, INTEGER) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.mark_ai_credit_provider_started(UUID) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.settle_ai_credit_reservation(UUID, TEXT, INTEGER, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.reserve_ai_credit(UUID, TEXT, TEXT, INTEGER) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.mark_ai_credit_provider_started(UUID) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.settle_ai_credit_reservation(UUID, TEXT, INTEGER, TEXT) TO authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION public.handle_updated_at()
 RETURNS TRIGGER AS $$
@@ -360,6 +779,11 @@ CREATE TRIGGER set_projects_updated_at
   BEFORE UPDATE ON public.projects
   FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
 
+DROP TRIGGER IF EXISTS set_ai_credit_reservations_updated_at ON public.ai_credit_reservations;
+CREATE TRIGGER set_ai_credit_reservations_updated_at
+  BEFORE UPDATE ON public.ai_credit_reservations
+  FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+
 DROP TRIGGER IF EXISTS enforce_project_limit_on_insert ON public.projects;
 CREATE TRIGGER enforce_project_limit_on_insert
   BEFORE INSERT ON public.projects
@@ -380,6 +804,8 @@ ALTER TABLE public.subscriptions    ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.projects         ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.documents        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.usage_logs      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.ai_credit_topups ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.ai_credit_reservations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.razorpay_payments ENABLE ROW LEVEL SECURITY;
 
 -- profiles
@@ -443,6 +869,18 @@ CREATE POLICY "Users can insert own usage logs"
   ON public.usage_logs FOR INSERT
   WITH CHECK (auth.uid() = user_id);
 
+-- ai_credit_topups / ai_credit_reservations: users may inspect their own accounting;
+-- reservations and settlement are only mutated through SECURITY DEFINER RPCs.
+DROP POLICY IF EXISTS "Users can view own AI credit topups" ON public.ai_credit_topups;
+CREATE POLICY "Users can view own AI credit topups"
+  ON public.ai_credit_topups FOR SELECT
+  USING (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can view own AI credit reservations" ON public.ai_credit_reservations;
+CREATE POLICY "Users can view own AI credit reservations"
+  ON public.ai_credit_reservations FOR SELECT
+  USING (auth.uid() = user_id);
+
 -- razorpay_payments
 DROP POLICY IF EXISTS "Users can view own razorpay payments" ON public.razorpay_payments;
 CREATE POLICY "Users can view own razorpay payments"
@@ -484,6 +922,8 @@ ANALYZE public.subscriptions;
 ANALYZE public.projects;
 ANALYZE public.documents;
 ANALYZE public.usage_logs;
+ANALYZE public.ai_credit_topups;
+ANALYZE public.ai_credit_reservations;
 ANALYZE public.razorpay_payments;
 
 SELECT 'Database schema created successfully!' AS status;

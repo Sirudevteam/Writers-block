@@ -5,6 +5,13 @@ import { runAiRateLimits } from "@/lib/ai-rate-limits"
 import { getEffectivePlanForApiUser } from "@/lib/ai-effective-plan"
 import { apiIpLimitOr429 } from "@/lib/api-ip-limit"
 import { buildTextCompletionInput, getReplicateModelForPlan, getStreamOutputText } from "@/lib/replicate-model"
+import {
+  aiCreditHeaders,
+  createAiCreditSseStream,
+  markAiProviderStarted,
+  reserveAiCredits,
+  settleAiCreditReservation,
+} from "@/lib/ai-credits"
 
 const replicate = new Replicate({ auth: process.env.REPLICATE_API_TOKEN })
 
@@ -27,7 +34,6 @@ export async function POST(req: NextRequest) {
     const rate = await runAiRateLimits(req, effectivePlan, user.id)
     if (!rate.ok) return rate.response
     const { planQuota } = rate
-    const model = getReplicateModelForPlan(effectivePlan)
 
     const { screenplay } = await req.json()
 
@@ -35,9 +41,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Screenplay is too short to improve" }, { status: 400 })
     }
 
-    // Fire-and-forget usage log
-    void (supabase as any).from("usage_logs")
-      .insert({ user_id: user.id, endpoint: "improve-dialogue", plan: effectivePlan })
+    const credit = await reserveAiCredits(supabase as any, {
+      userId: user.id,
+      endpoint: "improve-dialogue",
+      plan: effectivePlan,
+    })
+    if (!credit.ok) return credit.response
+    const { reservation } = credit
+    const model = getReplicateModelForPlan(reservation.plan)
 
     const systemPrompt = `You are an expert Tamil cinema dialogue writer. You improve screenplay dialogue to make it more:
 - Emotionally authentic (உண்மையான உணர்ச்சி)
@@ -62,22 +73,27 @@ RULES:
       llama: { minTokens: 200, topK: 40, presencePenalty: 0.3 },
     })
 
-    const stream = await replicate.stream(model as `${string}/${string}`, { input })
+    let providerStarted = false
+    let stream
+    try {
+      await markAiProviderStarted(supabase as any, reservation)
+      providerStarted = true
+      stream = await replicate.stream(model as `${string}/${string}`, { input })
+    } catch (error) {
+      await settleAiCreditReservation(supabase as any, reservation, {
+        outcome: providerStarted ? "failed_charged" : "release",
+        failureCode: providerStarted ? "provider_start_error" : "provider_not_started",
+      }).catch((settleError) => {
+        console.error("[ai-credits] failed to settle improve-dialogue startup error", settleError)
+      })
+      throw error
+    }
 
-    const readableStream = new ReadableStream({
-      async start(controller) {
-        const encoder = new TextEncoder()
-        for await (const chunk of stream) {
-          const text = getStreamOutputText(chunk)
-          if (text) {
-            controller.enqueue(
-              encoder.encode(`data: ${JSON.stringify({ content: text })}\n\n`)
-            )
-          }
-        }
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true })}\n\n`))
-        controller.close()
-      },
+    const readableStream = createAiCreditSseStream({
+      providerStream: stream,
+      supabase: supabase as any,
+      reservation,
+      getText: getStreamOutputText,
     })
 
     return new NextResponse(readableStream, {
@@ -85,6 +101,7 @@ RULES:
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
         Connection: "keep-alive",
+        ...aiCreditHeaders(reservation),
         "X-RateLimit-Remaining": String(planQuota.remaining),
       },
     })
